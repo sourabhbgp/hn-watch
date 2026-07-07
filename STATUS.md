@@ -17,7 +17,9 @@ Updated at the end of every working session.
   - Left sidebar: list of monitors + "New monitor" button (no-op)
   - Center: Twitter-style feed of match cards
   - Slide-over: "Dig deeper" panel with mock agent lanes + a compiled brief
-- [x] Git initialised; baseline on `main`; UI built on `feat/ui-shell` and merged
+- [x] Verified live: app compiles & launches; feed renders; monitor filtering and
+      the dig-deeper panel work (checked against the Vite dev server)
+- [x] Git initialised; baseline on `main`; UI built on `feat/ui-shell`, merged via `--no-ff`
 
 **Not yet (intentionally)** — everything below is UI-only mock; no logic behind it:
 buttons are no-ops, data is hard-coded, nothing calls Rust or Claude, no persistence.
