@@ -1,0 +1,264 @@
+<meta charset="utf-8">
+<title>HN Watch — Architecture</title>
+<style>
+  :root{
+    --ink:#14110d; --soft:#4b463f; --faint:#8a8378;
+    --paper:#faf8f4; --card:#fff; --line:#e7e1d6;
+    --hn:#ff6600; --hn-s:#fff1e6; --hn-b:#ffd2ac;
+    --rust:#b7410e; --rust-s:#fbeee7; --rust-b:#f0d8cb;
+    --web:#2563eb; --web-s:#e9f0ff; --web-b:#cdddff;
+    --ok:#3f7d3f; --ok-s:#eaf3ea;
+    --mono:"SF Mono",ui-monospace,Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px}
+  .wrap{max-width:1060px;margin:0 auto;padding:40px 36px 72px}
+
+  header{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+  .logo{width:40px;height:40px;border-radius:9px;background:var(--hn);color:#fff;display:grid;place-items:center;font-weight:800;font-size:19px}
+  h1{font-size:24px;margin:0;letter-spacing:-.4px}
+  .sub{color:var(--faint);font-size:13px;margin-top:2px}
+  .rt{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right;line-height:1.6}
+
+  h2{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);font-weight:700;margin:38px 0 14px;display:flex;align-items:center;gap:10px}
+  h2::before{content:attr(data-n);font-family:var(--mono);color:var(--hn);font-size:12px}
+  h2 .hint{margin-left:auto;font-weight:500;letter-spacing:0;text-transform:none;color:var(--faint);font-family:var(--mono);font-size:11px}
+
+  /* nodes + arrows */
+  .node{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .node .ic{font-size:15px;line-height:1}
+  .node .lb{font-weight:700;font-size:13px;line-height:1.2}
+  .node .sub2{font-size:11px;color:var(--soft);line-height:1.3}
+  .web{background:var(--web-s);border-color:var(--web-b)}
+  .rust{background:var(--rust-s);border-color:var(--rust-b)}
+  .ext{background:#f4f1ea}
+  .hn{background:var(--hn-s);border-color:var(--hn-b)}
+  .arr{display:grid;place-items:center;color:var(--faint);font-size:20px;flex:none;padding:0 2px}
+
+  /* tiers */
+  .tier{border:1px dashed var(--line);border-radius:14px;padding:14px;background:rgba(255,255,255,.5)}
+  .tier-lb{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;display:flex;align-items:center;gap:7px}
+  .d{width:8px;height:8px;border-radius:50%}
+  .cols{display:flex;gap:10px}
+  .cols .node{flex:1}
+  .between{display:flex;align-items:center;justify-content:center;gap:16px;padding:9px 0;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .between b{color:var(--rust);font-weight:600}
+  .vbar{width:1px;height:22px;background:var(--line)}
+  .downs{display:flex;justify-content:space-around;color:var(--line);font-size:22px;line-height:.6;padding:2px 0}
+
+  /* gate (core idea) */
+  .gate{display:grid;grid-template-columns:1fr auto 1.1fr auto 1fr;align-items:center;gap:6px;border:1px solid var(--line);border-radius:14px;background:var(--card);padding:18px 16px}
+  .stack{display:flex;flex-direction:column;gap:9px}
+  .gatebox{border:2px solid var(--hn-b);background:var(--hn-s);border-radius:12px;padding:13px 14px;text-align:center}
+  .gatebox .lb{font-weight:800;font-size:14px}
+  .gatebox .perm{font-family:var(--mono);font-size:11px;color:var(--rust);margin-top:6px;line-height:1.5}
+  .gatebox .perm b{background:#fff;border:1px solid var(--hn-b);border-radius:6px;padding:1px 6px}
+  .procs{display:flex;flex-direction:column;gap:6px}
+  .proc{font-family:var(--mono);font-size:11px;background:#f4f1ea;border:1px solid var(--line);border-radius:7px;padding:5px 9px;color:var(--soft)}
+  .flowtag{font-size:11px;color:var(--faint);text-align:center;margin-top:2px}
+
+  /* horizontal pipeline */
+  .pipe{display:flex;align-items:stretch;gap:4px;flex-wrap:wrap}
+  .pipe .node{flex:1;min-width:118px}
+  .pipe .arr{align-self:center}
+
+  /* svg wrap */
+  .svgwrap{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:8px}
+  svg{display:block;width:100%;height:auto}
+
+  /* data strip */
+  .data{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .cyl{flex:1;min-width:120px;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 12px;text-align:center}
+  .cyl .t{font-family:var(--mono);font-weight:700;font-size:12.5px}
+  .cyl .s{font-size:10.5px;color:var(--soft);margin-top:2px}
+  .db{border:2px solid var(--rust-b);background:var(--rust-s);border-radius:10px;padding:11px 16px;text-align:center;flex:none}
+  .db .t{font-weight:800;font-size:13px}
+  .db .s{font-size:10.5px;color:var(--rust);font-family:var(--mono)}
+
+  /* legend */
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:11px;color:var(--soft);font-family:var(--mono);margin-top:8px}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .sw{width:12px;height:12px;border-radius:3px;border:1px solid var(--line)}
+
+  footer{margin-top:44px;border-top:1px solid var(--line);padding-top:14px;font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+
+  @media(max-width:760px){.gate{grid-template-columns:1fr}.wrap{padding:28px 18px}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="logo">Y</div>
+    <div>
+      <h1>HN Watch</h1>
+      <div class="sub">Native tray app · watches Hacker News · local Claude agents</div>
+    </div>
+    <div class="rt">ARCH v0.2<br>Tauri · Rust · WebView<br>runtime: <b style="color:var(--rust)">claude -p</b></div>
+  </header>
+
+  <!-- ========== SYSTEM MAP ========== -->
+  <h2 data-n="01">System map</h2>
+
+  <div class="tier">
+    <div class="tier-lb"><span class="d" style="background:var(--web)"></span>WebView — UI (HTML / CSS / TS)</div>
+    <div class="cols">
+      <div class="node web"><span class="ic">🖥️</span><span class="lb">Monitors</span><span class="sub2">prompt + schedule</span></div>
+      <div class="node web"><span class="ic">📰</span><span class="lb">Feed</span><span class="sub2">live timeline</span></div>
+      <div class="node web"><span class="ic">🔬</span><span class="lb">Dig-deeper</span><span class="sub2">swarm + brief</span></div>
+    </div>
+  </div>
+
+  <div class="between">
+    <span>▲ commands &nbsp;<b>invoke()</b>&nbsp; ▼ events &nbsp;<b>emit()</b></span>
+  </div>
+
+  <div class="tier">
+    <div class="tier-lb"><span class="d" style="background:var(--rust)"></span>Rust core (Tauri) — the engine</div>
+    <div class="cols" style="margin-bottom:9px">
+      <div class="node rust"><span class="ic">⏱️</span><span class="lb">Monitor workers</span><span class="sub2">1 Tokio task each · timer</span></div>
+      <div class="node rust"><span class="ic">📥</span><span class="lb">Ingestion</span><span class="sub2">HN fetch + pre-filter</span></div>
+      <div class="node rust"><span class="ic">🧭</span><span class="lb">Swarm orchestrator</span><span class="sub2">fan-out · stream · compile</span></div>
+    </div>
+    <div class="cols">
+      <div class="node hn" style="flex:2"><span class="ic">⚙️</span><span class="lb">Agent runtime &nbsp;— the shared spine</span><span class="sub2">the only door to <b>claude -p</b> · bounded pool · timeout · retry · logs every call</span></div>
+      <div class="node rust"><span class="ic">🗄️</span><span class="lb">Store + dedup</span><span class="sub2">SQLite</span></div>
+    </div>
+  </div>
+
+  <div class="downs"><span>▼</span><span>▼</span><span>▼</span><span>▼</span></div>
+
+  <div class="tier">
+    <div class="tier-lb"><span class="d" style="background:var(--faint)"></span>Outside the app</div>
+    <div class="cols">
+      <div class="node ext"><span class="ic">🟠</span><span class="lb">Hacker News API</span><span class="sub2">recent stories</span></div>
+      <div class="node ext"><span class="ic">🤖</span><span class="lb">claude -p ×N</span><span class="sub2">child processes</span></div>
+      <div class="node ext"><span class="ic">🔔</span><span class="lb">Tray + notify</span><span class="sub2">runs window-closed</span></div>
+      <div class="node ext"><span class="ic">💾</span><span class="lb">SQLite file</span><span class="sub2">restart-safe</span></div>
+    </div>
+  </div>
+
+  <!-- ========== CORE IDEA ========== -->
+  <h2 data-n="02">One runtime, two rhythms <span class="hint">the thing they're testing</span></h2>
+  <div class="gate">
+    <div class="stack">
+      <div class="node rust"><span class="ic">🩸</span><span class="lb">Monitors</span><span class="sub2">trickle · 1 / tick</span></div>
+      <div class="node hn"><span class="ic">⚡</span><span class="lb">Swarm</span><span class="sub2">burst · N at once</span></div>
+    </div>
+    <div class="arr">→</div>
+    <div>
+      <div class="gatebox">
+        <div class="lb">⚙️ Agent runtime</div>
+        <div class="perm"><b>N permits</b> shared&nbsp; · &nbsp;<b>K reserved</b> for swarm</div>
+        <div class="perm">backoff on 429 · timeout · retry</div>
+      </div>
+      <div class="flowtag">scarce resource = upstream Claude limit, not the laptop</div>
+    </div>
+    <div class="arr">→</div>
+    <div class="procs">
+      <div class="proc">🤖 claude -p</div>
+      <div class="proc">🤖 claude -p</div>
+      <div class="proc">🤖 claude -p</div>
+      <div class="proc" style="border-style:dashed">…bounded</div>
+    </div>
+  </div>
+
+  <!-- ========== FLOW: TICK ========== -->
+  <h2 data-n="03">Flow · monitor tick <span class="hint">steady · 1 call</span></h2>
+  <div class="pipe">
+    <div class="node rust"><span class="ic">⏱️</span><span class="lb">Timer</span><span class="sub2">interval fires</span></div>
+    <div class="arr">→</div>
+    <div class="node ext"><span class="ic">📥</span><span class="lb">Fetch HN</span><span class="sub2">recent stories</span></div>
+    <div class="arr">→</div>
+    <div class="node rust"><span class="ic">🔍</span><span class="lb">Pre-filter</span><span class="sub2">drop seen</span></div>
+    <div class="arr">→</div>
+    <div class="node hn"><span class="ic">🤖</span><span class="lb">claude -p</span><span class="sub2">judge + summarize</span></div>
+    <div class="arr">→</div>
+    <div class="node rust"><span class="ic">🗄️</span><span class="lb">Save + dedup</span><span class="sub2">mark seen</span></div>
+    <div class="arr">→</div>
+    <div class="node web"><span class="ic">📰</span><span class="lb">Feed + 🔔</span><span class="sub2">emit + notify</span></div>
+  </div>
+
+  <!-- ========== FLOW: SWARM ========== -->
+  <h2 data-n="04">Flow · dig deeper <span class="hint">burst · N calls · streaming</span></h2>
+  <div class="svgwrap">
+    <svg viewBox="0 0 920 250" role="img" aria-label="Dig deeper swarm fan-out">
+      <defs>
+        <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 Z" fill="#8a8378"/>
+        </marker>
+        <style>
+          .r{rx:9;ry:9}
+          .lbl{font-family:-apple-system,Inter,sans-serif;font-weight:700;font-size:12.5px;fill:#14110d}
+          .cap{font-family:'SF Mono',Menlo,monospace;font-size:10px;fill:#8a8378}
+          .ln{stroke:#c9c1b4;stroke-width:1.5;fill:none;marker-end:url(#ah)}
+        </style>
+      </defs>
+
+      <!-- connectors: orchestrator -> agents -->
+      <path class="ln" d="M250,125 C285,125 285,42 320,42"/>
+      <path class="ln" d="M250,125 C285,125 285,97 320,97"/>
+      <path class="ln" d="M250,125 C285,125 285,152 320,152"/>
+      <path class="ln" d="M250,125 C285,125 285,207 320,207"/>
+      <!-- agents -> compile -->
+      <path class="ln" d="M500,42 C560,42 560,125 600,125"/>
+      <path class="ln" d="M500,97 C560,97 560,125 600,125"/>
+      <path class="ln" d="M500,152 C560,152 560,125 600,125"/>
+      <path class="ln" d="M500,207 C560,207 560,125 600,125"/>
+      <!-- click -> orch ; compile -> brief -->
+      <path class="ln" d="M110,125 L140,125"/>
+      <path class="ln" d="M710,125 L740,125"/>
+
+      <!-- click -->
+      <rect class="r" x="20" y="106" width="90" height="38" fill="#e9f0ff" stroke="#cdddff"/>
+      <text class="lbl" x="65" y="130" text-anchor="middle">🖱️ Click</text>
+
+      <!-- orchestrator -->
+      <rect class="r" x="142" y="100" width="108" height="50" fill="#fbeee7" stroke="#f0d8cb"/>
+      <text class="lbl" x="196" y="122" text-anchor="middle">🧭 Orchestr.</text>
+      <text class="cap" x="196" y="138" text-anchor="middle">fan-out</text>
+
+      <!-- agents -->
+      <rect class="r" x="320" y="22" width="180" height="40" fill="#fff1e6" stroke="#ffd2ac"/>
+      <text class="lbl" x="332" y="47">🏢 Company / people</text>
+      <rect class="r" x="320" y="77" width="180" height="40" fill="#fff1e6" stroke="#ffd2ac"/>
+      <text class="lbl" x="332" y="102">🔧 Tech &amp; how it works</text>
+      <rect class="r" x="320" y="132" width="180" height="40" fill="#fff1e6" stroke="#ffd2ac"/>
+      <text class="lbl" x="332" y="157">📊 Market &amp; rivals</text>
+      <rect class="r" x="320" y="187" width="180" height="40" fill="#fff1e6" stroke="#ffd2ac"/>
+      <text class="lbl" x="332" y="212">🕵️ Skeptic / risks</text>
+      <text class="cap" x="410" y="245" text-anchor="middle">↝ each streams live to the UI (stream-json)</text>
+
+      <!-- compile -->
+      <rect class="r" x="600" y="100" width="110" height="50" fill="#fbeee7" stroke="#f0d8cb"/>
+      <text class="lbl" x="655" y="122" text-anchor="middle">🧩 Compile</text>
+      <text class="cap" x="655" y="138" text-anchor="middle">merge angles</text>
+
+      <!-- brief -->
+      <rect class="r" x="742" y="106" width="120" height="38" fill="#eaf3ea" stroke="#cfe6cf"/>
+      <text class="lbl" x="802" y="130" text-anchor="middle">📄 Brief</text>
+    </svg>
+  </div>
+
+  <!-- ========== PERSISTENCE ========== -->
+  <h2 data-n="05">Persistence <span class="hint">survives restart</span></h2>
+  <div class="data">
+    <div class="cyl"><div class="t">monitors</div><div class="s">re-spawn on launch</div></div>
+    <div class="cyl"><div class="t">feed_items</div><div class="s">the timeline</div></div>
+    <div class="cyl"><div class="t">seen</div><div class="s">dedup · per monitor</div></div>
+    <div class="cyl"><div class="t">briefs</div><div class="s">swarm output</div></div>
+    <div class="arr">→</div>
+    <div class="db"><div class="t">💾 SQLite</div><div class="s">one local file</div></div>
+  </div>
+
+  <div class="legend">
+    <span><span class="sw" style="background:var(--web-s);border-color:var(--web-b)"></span>UI / WebView</span>
+    <span><span class="sw" style="background:var(--rust-s);border-color:var(--rust-b)"></span>Rust core</span>
+    <span><span class="sw" style="background:var(--hn-s);border-color:var(--hn-b)"></span>Agent path</span>
+    <span><span class="sw" style="background:#f4f1ea"></span>External</span>
+  </div>
+
+  <footer>
+    <span>HN Watch · architecture v0.2 · draft for discussion</span>
+    <span>macOS build · one Tauri codebase</span>
+  </footer>
+</div>

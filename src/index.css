@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/* HN Watch design tokens — kept in sync with docs/architecture.html */
+@theme {
+  --color-paper: #faf8f4;
+  --color-card: #ffffff;
+  --color-line: #e7e1d6;
+  --color-ink: #14110d;
+  --color-soft: #4b463f;
+  --color-faint: #8a8378;
+  --color-hn: #ff6600;
+  --color-hn-soft: #fff1e6;
+  --color-hn-border: #ffd2ac;
+  --color-rust: #b7410e;
+  --color-ok: #3f7d3f;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* the app owns its own scroll regions */
+}
+
+/* thin, unobtrusive scrollbars for the feed/panels */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 8px;
+}
