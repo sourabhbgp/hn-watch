@@ -111,11 +111,18 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
         .map_err(|e| format!("semaphore closed: {e}"))?;
     // stdin(null): claude -p otherwise waits ~3s for piped stdin each call
     // ("Warning: no stdin data received in 3s"). We pass the prompt as an arg.
+    // current_dir(temp): claude (Claude Code) treats its working directory as a
+    // project workspace and scans it. Without this it inherits the app's cwd —
+    // which, for a Finder-launched bundle, can sit under a TCC-protected folder
+    // (Desktop/Documents), triggering a macOS file-access prompt. This judge call
+    // is pure text-in/JSON-out and needs no files, so we point it at the system
+    // temp dir (not TCC-protected) — no prompt, nothing of the user's is read.
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(90),
         tokio::process::Command::new(claude_bin())
             .arg("-p")
             .arg(&prompt)
+            .current_dir(std::env::temp_dir())
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
             .output(),
