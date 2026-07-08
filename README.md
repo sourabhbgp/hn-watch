@@ -11,7 +11,7 @@ a native notification when new items land. Any feed item can launch a **research
 
 > **Status:** early scaffolding. This is being built in phases across multiple sessions.
 > See [`STATUS.md`](./STATUS.md) for exactly what works today and what's next, and
-> [`DECISIONS.md`](./DECISIONS.md) for the architectural choices and trade-offs.
+> [`docs/REQUIREMENTS.md`](./docs/REQUIREMENTS.md) for the verbatim requirement we're building to.
 
 ---
 
@@ -64,9 +64,12 @@ hn-watch/
 │  └─ types.ts       # shared UI types
 ├─ src-tauri/         # Rust core — window, tray, workers, agent runtime (grows by phase)
 ├─ docs/
-│  └─ architecture.html   # the visual system design
-├─ STATUS.md          # what's done / next / how to run
-├─ DECISIONS.md       # architectural choices + trade-offs log
+│  ├─ REQUIREMENTS.md     # the verbatim requirement (source of truth)
+│  ├─ design.md           # design system — tokens, brand, components
+│  ├─ architecture.html   # the visual system design
+│  └─ TESTING.md          # native-window test loop
+├─ CLAUDE.md          # session context — rules + key file links (auto-loaded)
+├─ STATUS.md          # per-session log — what's done / next / how to run
 └─ README.md
 ```
 
