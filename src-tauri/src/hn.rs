@@ -67,7 +67,13 @@ pub async fn fetch_recent(limit: usize) -> Result<Vec<HnItem>, String> {
         "https://hn.algolia.com/api/v1/search_by_date?tags=story&hitsPerPage={}",
         limit
     );
-    let body = reqwest::get(&url)
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("hn client build failed: {e}"))?;
+    let body = client
+        .get(&url)
+        .send()
         .await
         .map_err(|e| format!("hn request failed: {e}"))?
         .text()

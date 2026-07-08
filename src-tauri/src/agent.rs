@@ -111,13 +111,18 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
         .map_err(|e| format!("semaphore closed: {e}"))?;
     // stdin(null): claude -p otherwise waits ~3s for piped stdin each call
     // ("Warning: no stdin data received in 3s"). We pass the prompt as an arg.
-    let output = tokio::process::Command::new(claude_bin())
-        .arg("-p")
-        .arg(&prompt)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("failed to spawn claude: {e}"))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(90),
+        tokio::process::Command::new(claude_bin())
+            .arg("-p")
+            .arg(&prompt)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "claude timed out after 90s".to_string())?
+    .map_err(|e| format!("failed to spawn claude: {e}"))?;
     if !output.status.success() {
         return Err(format!(
             "claude exited with status {}: {}",

@@ -46,7 +46,8 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              reason TEXT NOT NULL,
              hn_score INTEGER NOT NULL,
              hn_comments INTEGER NOT NULL,
-             created_at INTEGER NOT NULL
+             created_at INTEGER NOT NULL,
+             UNIQUE(monitor_id, hn_id)
          );
          CREATE TABLE IF NOT EXISTS seen (
              monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
@@ -89,7 +90,7 @@ pub fn delete_monitor(conn: &Connection, id: &str) -> rusqlite::Result<()> {
 
 pub fn insert_feed_item(conn: &Connection, f: &FeedRow) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO feed_items
+        "INSERT OR IGNORE INTO feed_items
          (id, monitor_id, hn_id, title, url, domain, summary, reason, hn_score, hn_comments, created_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         rusqlite::params![
@@ -216,5 +217,20 @@ mod tests {
         delete_monitor(&c, "m1").unwrap();
         assert_eq!(count_matches(&c, "m1").unwrap(), 0);
         assert_eq!(list_seen(&c, "m1").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn feed_item_dedup_on_monitor_and_hn_id() {
+        let c = mem();
+        insert_monitor(&c, &sample_monitor("m1")).unwrap();
+        let mut row = FeedRow {
+            id: "f1".into(), monitor_id: "m1".into(), hn_id: "hn1".into(),
+            title: "t".into(), url: "u".into(), domain: "d".into(),
+            summary: "s".into(), reason: "r".into(), hn_score: 1, hn_comments: 1, created_at: 1,
+        };
+        insert_feed_item(&c, &row).unwrap();
+        row.id = "f2".into(); // different row id, same (monitor_id, hn_id)
+        insert_feed_item(&c, &row).unwrap();
+        assert_eq!(count_matches(&c, "m1").unwrap(), 1);
     }
 }
