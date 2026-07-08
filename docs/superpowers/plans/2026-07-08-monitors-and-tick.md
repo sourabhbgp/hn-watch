@@ -524,9 +524,12 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
         .acquire()
         .await
         .map_err(|e| format!("semaphore closed: {e}"))?;
+    // stdin(null): claude -p otherwise waits ~3s for piped stdin each call
+    // ("Warning: no stdin data received in 3s"). We pass the prompt as an arg.
     let output = tokio::process::Command::new("claude")
         .arg("-p")
         .arg(&prompt)
+        .stdin(std::process::Stdio::null())
         .output()
         .await
         .map_err(|e| format!("failed to spawn claude: {e}"))?;
@@ -1049,7 +1052,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let state = commands::init_state(&app.handle());
+            // app.handle() already returns &AppHandle — no extra & (init_state takes &AppHandle).
+            let state = commands::init_state(app.handle());
             app.manage(state);
             Ok(())
         })
@@ -1415,7 +1419,7 @@ Expected: the native "HN Watch" window opens with an empty monitor list and empt
 - [ ] **Step 2: Create a monitor and observe a real tick**
 
 In the window: click **+ New monitor**, enter a name (e.g. "Show HN devtools"), a prompt (e.g. "Show HN posts for developer tools"), pick **every 15m**, click **Create**.
-Expected within a few seconds (immediate first tick): the monitor appears in the sidebar; its match count and one or more real feed cards populate as `claude -p` returns matches. Check the dev console/terminal for `[hn-watch]` errors if nothing lands.
+Expected within ~10–20 seconds (immediate first tick; a single `claude -p` call measured ~10s): the monitor appears in the sidebar immediately, then its match count and one or more real feed cards populate as `claude -p` returns matches. Check the dev console/terminal for `[hn-watch]` errors if nothing lands.
 
 - [ ] **Step 3: Verify dedup on a second tick**
 
