@@ -1,5 +1,6 @@
 use crate::hn::HnItem;
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
 
@@ -8,6 +9,48 @@ use tokio::sync::Semaphore;
 fn agent_sem() -> &'static Semaphore {
     static SEM: OnceLock<Semaphore> = OnceLock::new();
     SEM.get_or_init(|| Semaphore::new(4))
+}
+
+/// First candidate path that exists, as a string; None if none exist.
+fn find_claude(candidates: impl IntoIterator<Item = PathBuf>) -> Option<String> {
+    candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Where `claude` might live: every dir already on PATH, then common install
+/// locations. A GUI-launched macOS app inherits a minimal PATH that omits
+/// ~/.local/bin etc., so we can't rely on PATH resolution alone.
+fn claude_candidates() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            dirs.push(dir.join("claude"));
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        dirs.push(home.join(".local/bin/claude"));
+        dirs.push(home.join(".bun/bin/claude"));
+        dirs.push(home.join("bin/claude"));
+    }
+    for p in [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        "/usr/bin/claude",
+    ] {
+        dirs.push(PathBuf::from(p));
+    }
+    dirs
+}
+
+/// Resolved absolute path to the `claude` binary, computed once. Falls back to
+/// the bare name "claude" (PATH resolution) if nothing is found.
+fn claude_bin() -> String {
+    static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| find_claude(claude_candidates()).unwrap_or_else(|| "claude".to_string()))
+        .clone()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68,7 +111,7 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
         .map_err(|e| format!("semaphore closed: {e}"))?;
     // stdin(null): claude -p otherwise waits ~3s for piped stdin each call
     // ("Warning: no stdin data received in 3s"). We pass the prompt as an arg.
-    let output = tokio::process::Command::new("claude")
+    let output = tokio::process::Command::new(claude_bin())
         .arg("-p")
         .arg(&prompt)
         .stdin(std::process::Stdio::null())
@@ -116,5 +159,17 @@ mod tests {
         let p = build_prompt("rust async", &items);
         assert!(p.contains("rust async"));
         assert!(p.contains("\"42\""));
+    }
+
+    #[test]
+    fn find_claude_picks_first_existing() {
+        // A path we know exists on any unix: /bin/sh. Use it as a stand-in binary.
+        let existing = std::path::PathBuf::from("/bin/sh");
+        let missing = std::path::PathBuf::from("/no/such/dir/claude");
+        // missing first, then existing -> returns the existing one
+        let got = find_claude(vec![missing.clone(), existing.clone()]);
+        assert_eq!(got, Some("/bin/sh".to_string()));
+        // nothing exists -> None
+        assert_eq!(find_claude(vec![missing]), None);
     }
 }
