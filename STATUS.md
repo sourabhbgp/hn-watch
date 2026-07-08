@@ -3,9 +3,11 @@
 A running log of what actually works, what's next, and how to run the app.
 Updated at the end of every working session.
 
+**Requirement (source of truth):** [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
+
 ---
 
-## Now (Session 1 — Scaffold + static UI shell)
+## Session 1 — Scaffold + static UI shell
 
 **Done**
 
@@ -24,6 +26,18 @@ Updated at the end of every working session.
 **Not yet (intentionally)** — everything below is UI-only mock; no logic behind it:
 buttons are no-ops, data is hard-coded, nothing calls Rust or Claude, no persistence.
 
+## Session 2 — Brand icon + project docs
+
+**Done**
+
+- [x] Custom brand mark — bold white "W" on an HN-orange squircle, one source `assets/brand/icon.svg`
+- [x] Regenerated the app bundle icon set (dock / Spotlight); replaced the Tauri placeholder
+- [x] Sidebar logo Y → W, sized to match the dock icon; updated the `docs/architecture.html` logo
+- [x] `docs/design.md` — design-system reference (brand, color tokens, typography, components)
+- [x] Captured the verbatim brief in `docs/REQUIREMENTS.md`; added root `CLAUDE.md` (auto-loaded
+      session context); removed `DECISIONS.md`
+- [x] Verified live in the native window; merged `feat/brand-icon` → `main`, pushed to origin
+
 ## How to run
 
 ```bash
@@ -33,7 +47,11 @@ npm run tauri dev     # opens the native HN Watch window
 
 Requires Node 20+, Rust stable, and `claude` on the PATH (used from Phase 3 onward).
 
-## Next (Session 2 — Monitors CRUD + persistence)
+**Testing:** test against the **real native app window**, never a browser at localhost — see
+[`docs/TESTING.md`](docs/TESTING.md) for the verified computer-use test loop (launch → screenshot →
+drive). Verified working end-to-end in Session 1.
+
+## Next — Monitors CRUD + persistence (Phase 2)
 
 - [ ] Define shared types + Tauri command surface (`create_monitor`, `list_monitors`, …)
 - [ ] SQLite store in the Rust core; monitors survive restart
