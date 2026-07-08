@@ -109,20 +109,28 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
         .acquire()
         .await
         .map_err(|e| format!("semaphore closed: {e}"))?;
-    // stdin(null): claude -p otherwise waits ~3s for piped stdin each call
-    // ("Warning: no stdin data received in 3s"). We pass the prompt as an arg.
-    // current_dir(temp): claude (Claude Code) treats its working directory as a
-    // project workspace and scans it. Without this it inherits the app's cwd —
-    // which, for a Finder-launched bundle, can sit under a TCC-protected folder
-    // (Desktop/Documents), triggering a macOS file-access prompt. This judge call
-    // is pure text-in/JSON-out and needs no files, so we point it at the system
-    // temp dir (not TCC-protected) — no prompt, nothing of the user's is read.
+    // This judge call is pure text-in / JSON-out — it must never read the user's
+    // files. Claude Code otherwise treats its surroundings as a project workspace
+    // and, for a Finder-launched bundle sitting under ~/Desktop, that triggers a
+    // macOS "access your Desktop folder" TCC prompt that blocks the tick. Three
+    // things keep it fully sandboxed while preserving the CLI's own keychain auth:
+    //   --safe-mode : start with all customizations off — no CLAUDE.md / memory /
+    //                 plugin / hook / MCP discovery (keeps OAuth/keychain auth,
+    //                 unlike --bare which forces an API key).
+    //   current_dir : run from the temp dir, not the inherited (Desktop) cwd.
+    //   env("PWD")  : Claude walks up from $PWD, NOT getcwd() — current_dir alone
+    //                 leaves the inherited $PWD (~/Desktop...) in place, so we must
+    //                 override it too or the tree-walk still reaches Desktop.
+    // stdin(null): claude -p otherwise waits ~3s for piped stdin on every call.
+    let workdir = std::env::temp_dir();
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(90),
         tokio::process::Command::new(claude_bin())
             .arg("-p")
+            .arg("--safe-mode")
             .arg(&prompt)
-            .current_dir(std::env::temp_dir())
+            .current_dir(&workdir)
+            .env("PWD", &workdir)
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
             .output(),
