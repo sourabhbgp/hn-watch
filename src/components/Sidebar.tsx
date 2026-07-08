@@ -68,7 +68,7 @@ export function Sidebar({
       {/* brand */}
       <div className="flex items-center gap-2.5 px-4 py-4">
         <div className="h-8 w-8 shrink-0 rounded-lg bg-hn grid place-items-center">
-          <svg viewBox="0 0 1024 1024" className="h-5 w-5" aria-hidden="true">
+          <svg viewBox="216 216 592 592" className="h-6 w-6" aria-hidden="true">
             <path
               d="M300 356 L376 668 L512 470 L648 668 L724 356"
               fill="none"
