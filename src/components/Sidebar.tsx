@@ -67,8 +67,17 @@ export function Sidebar({
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-line bg-card/40">
       {/* brand */}
       <div className="flex items-center gap-2.5 px-4 py-4">
-        <div className="grid h-8 w-8 place-items-center rounded-lg bg-hn text-[16px] font-extrabold text-white">
-          Y
+        <div className="h-8 w-8 shrink-0 rounded-lg bg-hn grid place-items-center">
+          <svg viewBox="0 0 1024 1024" className="h-5 w-5" aria-hidden="true">
+            <path
+              d="M300 356 L376 668 L512 470 L648 668 L724 356"
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth={88}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </div>
         <div>
           <div className="text-[15px] font-bold leading-none tracking-tight">
