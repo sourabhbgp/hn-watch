@@ -26,7 +26,9 @@ pub fn run() {
                 use tauri_plugin_notification::{NotificationExt, PermissionState};
                 let n = app.notification();
                 if !matches!(n.permission_state(), Ok(PermissionState::Granted)) {
-                    let _ = n.request_permission();
+                    if let Err(e) = n.request_permission() {
+                        eprintln!("[hn-watch] notification permission request failed: {e}");
+                    }
                 }
             }
 
@@ -51,6 +53,7 @@ pub fn run() {
             commands::list_feed,
             commands::claude_health,
             commands::recheck_claude,
+            commands::notification_health,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
