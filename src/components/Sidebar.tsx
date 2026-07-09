@@ -48,6 +48,10 @@ function MonitorRow({
       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-rust" />
       Checking…
     </span>
+  ) : monitor.status === "paused" ? (
+    <span className="shrink-0 rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-faint">
+      Paused
+    </span>
   ) : monitor.status === "error" ? (
     <span
       title={monitor.lastError ?? ""}
