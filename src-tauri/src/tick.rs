@@ -55,7 +55,9 @@ pub fn build_feed_rows(
 /// `message()` is the friendly reason stored in `last_error`.
 #[derive(Debug)]
 pub enum TickError {
-    Hn(String),
+    // Underlying fetch error retained (mirrors Db's shape) for logs/Debug; the
+    // user-facing message() stays a generic, friendly string.
+    Hn(#[allow(dead_code)] String),
     Agent(agent::AgentError),
     Db(String),
 }

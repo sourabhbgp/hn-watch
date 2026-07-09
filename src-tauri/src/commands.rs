@@ -1,15 +1,17 @@
+use crate::agent::{self, ClaudeHealth};
 use crate::db::{self, Monitor};
 use crate::scheduler::Scheduler;
 use crate::tick::now_secs;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub scheduler: Scheduler,
+    pub claude_health: Arc<Mutex<ClaudeHealth>>,
 }
 
 #[derive(Serialize)]
@@ -26,6 +28,19 @@ pub struct MonitorDto {
     pub last_checked_count: Option<i64>,
     pub last_new_count: Option<i64>,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeHealthDto {
+    pub status: String,
+    pub message: String,
+}
+
+impl ClaudeHealthDto {
+    pub fn from_health(h: &ClaudeHealth) -> Self {
+        ClaudeHealthDto { status: h.code().into(), message: h.message() }
+    }
 }
 
 #[derive(Serialize)]
@@ -67,13 +82,20 @@ fn time_ago(created: i64, now: i64) -> String {
     }
 }
 
-fn to_monitor_dto(conn: &Connection, m: &Monitor) -> rusqlite::Result<MonitorDto> {
+fn to_monitor_dto(conn: &Connection, m: &Monitor, claude_ok: bool) -> rusqlite::Result<MonitorDto> {
+    let status = if !claude_ok {
+        "paused"
+    } else if m.last_error.is_some() {
+        "error"
+    } else {
+        "active"
+    };
     Ok(MonitorDto {
         id: m.id.clone(),
         name: m.name.clone(),
         prompt: m.prompt.clone(),
         interval_label: interval_label(m.interval_secs),
-        status: if m.last_error.is_some() { "error" } else { "active" }.into(),
+        status: status.into(),
         match_count: db::count_matches(conn, &m.id)?,
         last_checked_at: m.last_checked_at,
         next_check_at: next_check_at(m.last_checked_at, m.interval_secs),
@@ -85,11 +107,16 @@ fn to_monitor_dto(conn: &Connection, m: &Monitor) -> rusqlite::Result<MonitorDto
 
 #[tauri::command]
 pub fn list_monitors(state: State<'_, AppState>) -> Result<Vec<MonitorDto>, String> {
+    let claude_ok = state
+        .claude_health
+        .lock()
+        .map_err(|_| "health poisoned".to_string())?
+        .is_ok();
     let conn = state.db.lock().map_err(|_| "db poisoned".to_string())?;
     let monitors = db::list_monitors(&conn).map_err(|e| e.to_string())?;
     monitors
         .iter()
-        .map(|m| to_monitor_dto(&conn, m).map_err(|e| e.to_string()))
+        .map(|m| to_monitor_dto(&conn, m, claude_ok).map_err(|e| e.to_string()))
         .collect()
 }
 
@@ -138,14 +165,19 @@ pub fn create_monitor(
     if monitor.name.is_empty() || monitor.prompt.is_empty() {
         return Err("name and prompt are required".into());
     }
+    let claude_ok = state
+        .claude_health
+        .lock()
+        .map_err(|_| "health poisoned".to_string())?
+        .is_ok();
     let dto = {
         let conn = state.db.lock().map_err(|_| "db poisoned".to_string())?;
         db::insert_monitor(&conn, &monitor).map_err(|e| e.to_string())?;
-        to_monitor_dto(&conn, &monitor).map_err(|e| e.to_string())?
+        to_monitor_dto(&conn, &monitor, claude_ok).map_err(|e| e.to_string())?
     };
     state
         .scheduler
-        .spawn(app, Arc::clone(&state.db), monitor);
+        .spawn(app, Arc::clone(&state.db), Arc::clone(&state.claude_health), monitor);
     Ok(dto)
 }
 
@@ -157,26 +189,60 @@ pub fn delete_monitor(state: State<'_, AppState>, id: String) -> Result<(), Stri
     Ok(())
 }
 
-/// Called once at startup: open/create the DB and spawn a worker per monitor.
+#[tauri::command]
+pub fn claude_health(state: State<'_, AppState>) -> Result<ClaudeHealthDto, String> {
+    let h = state.claude_health.lock().map_err(|_| "health poisoned".to_string())?;
+    Ok(ClaudeHealthDto::from_health(&h))
+}
+
+#[tauri::command]
+pub async fn recheck_claude(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ClaudeHealthDto, String> {
+    let health = agent::preflight().await; // no MutexGuard held across await
+    {
+        let mut h = state.claude_health.lock().map_err(|_| "health poisoned".to_string())?;
+        *h = health.clone();
+    }
+    let dto = ClaudeHealthDto::from_health(&health);
+    let _ = app.emit("claude-health", dto.clone());
+    Ok(dto)
+}
+
+/// Called once at startup: open/create the DB, spawn a worker per monitor, and
+/// kick off an async Claude preflight (never blocks the window).
 pub fn init_state(app: &AppHandle) -> AppState {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .expect("no app data dir");
+    let dir = app.path().app_data_dir().expect("no app data dir");
     std::fs::create_dir_all(&dir).ok();
     let conn = Connection::open(dir.join("hn-watch.sqlite")).expect("open db");
     db::migrate(&conn).expect("migrate db");
     let db = Arc::new(Mutex::new(conn));
     let scheduler = Scheduler::new();
+    let claude_health = Arc::new(Mutex::new(ClaudeHealth::Ok));
 
     let existing = {
         let conn = db.lock().unwrap();
         db::list_monitors(&conn).unwrap_or_default()
     };
     for m in existing {
-        scheduler.spawn(app.clone(), Arc::clone(&db), m);
+        scheduler.spawn(app.clone(), Arc::clone(&db), Arc::clone(&claude_health), m);
     }
-    AppState { db, scheduler }
+
+    // Startup preflight, async so the window opens immediately.
+    {
+        let app = app.clone();
+        let health = Arc::clone(&claude_health);
+        tauri::async_runtime::spawn(async move {
+            let result = agent::preflight().await;
+            if let Ok(mut h) = health.lock() {
+                *h = result.clone();
+            }
+            let _ = app.emit("claude-health", ClaudeHealthDto::from_health(&result));
+        });
+    }
+
+    AppState { db, scheduler, claude_health }
 }
 
 #[cfg(test)]
@@ -203,5 +269,26 @@ mod tests {
     fn next_check_at_adds_interval_or_none() {
         assert_eq!(next_check_at(Some(1000), 1800), Some(2800));
         assert_eq!(next_check_at(None, 1800), None);
+    }
+
+    #[test]
+    fn status_paused_overrides_error_when_claude_down() {
+        use crate::db::Monitor;
+        let c = Connection::open_in_memory().unwrap();
+        db::migrate(&c).unwrap();
+        let mut m = Monitor {
+            id: "m1".into(), name: "n".into(), prompt: "p".into(),
+            interval_secs: 1800, created_at: 1,
+            last_checked_at: Some(10), last_checked_count: Some(5),
+            last_new_count: Some(0), last_error: None,
+        };
+        db::insert_monitor(&c, &m).unwrap();
+        // Claude down → paused, regardless of last_error
+        assert_eq!(to_monitor_dto(&c, &m, false).unwrap().status, "paused");
+        // Claude ok, no error → active
+        assert_eq!(to_monitor_dto(&c, &m, true).unwrap().status, "active");
+        // Claude ok, error set → error
+        m.last_error = Some("Claude timed out".into());
+        assert_eq!(to_monitor_dto(&c, &m, true).unwrap().status, "error");
     }
 }
