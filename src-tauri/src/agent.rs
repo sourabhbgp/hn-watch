@@ -326,7 +326,7 @@ mod tests {
     fn prompt_contains_prompt_and_ids() {
         let items = vec![HnItem {
             hn_id: "42".into(), title: "Rust".into(), url: "u".into(),
-            domain: "d".into(), points: 1, num_comments: 1,
+            domain: "d".into(), points: 1, num_comments: 1, created_at: 1,
         }];
         let p = build_prompt("rust async", &items);
         assert!(p.contains("rust async"));

@@ -91,7 +91,7 @@ pub async fn run_tick(
     db: &Arc<Mutex<Connection>>,
     monitor: &Monitor,
 ) -> Result<TickOutcome, TickError> {
-    let recent = hn::fetch_recent(30).await.map_err(TickError::Hn)?;
+    let recent = hn::fetch_since(now_secs() - 3600).await.map_err(TickError::Hn)?;
     let checked = recent.len();
 
     let seen = {
@@ -125,7 +125,7 @@ mod tests {
     fn item(id: &str) -> HnItem {
         HnItem {
             hn_id: id.into(), title: format!("t{id}"), url: "https://x.dev/a".into(),
-            domain: "x.dev".into(), points: 10, num_comments: 2,
+            domain: "x.dev".into(), points: 10, num_comments: 2, created_at: 1_700_000_000,
         }
     }
 
