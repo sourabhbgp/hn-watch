@@ -182,8 +182,53 @@ and (with #2) no stories missed. Suspend→wake and quit→relaunch behave ident
 
 ---
 
-_Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / preflight) done (Session 5);
-#2 (lossless ingestion) done (Session 6).** **#4 (sleep/wake catch-up) — WON'T DO** (Session 7: monotonic
-stopwatch scheduling is intentional; wall-clock rewrite + active-time persistence both rejected as
-over-engineering). **This backlog is now empty.** Next work lives in `STATUS.md`: Phase 3 (tray + native
-notifications) and the dig-deeper research swarm — both still-unbuilt core requirements._
+## 5. Surface the notification-denied state in the UI — no silent muting  🆕 NOT STARTED
+
+**Problem.** Notification permission is requested once at startup; if the user clicks **Don't
+Allow** (or later turns notifications off in System Settings), every `.show()` fails **silently** —
+no banner, no in-app indication, no re-prompt. macOS never shows the permission prompt again after a
+denial, so the only recovery is System Settings, which the user has no way to discover from the app.
+
+**Why it matters.** On a **different computer / fresh install**, a user who denies the prompt gets a
+watchtower that never taps them on the shoulder, with **zero signal that anything is wrong** — the
+core "fire a native notification when new items land" requirement quietly doesn't work. (Raised by
+the user after Session 8: "will it fail silently on another machine?" — yes, this is that gap.)
+
+**Current behavior.** `lib.rs` `setup` calls `n.request_permission()` only when state isn't
+`Granted` and **discards the result**; `scheduler.rs` fires `.show()` best-effort (`let _ = …`).
+Nothing reads the permission state back after startup or surfaces it anywhere in the UI.
+
+**Proposed approach (reuse the Claude-health banner pattern from Session 5).**
+- Read `notification().permission_state()` at startup and expose it to the frontend (a
+  `notification_health` command, or fold a `notificationsBlocked` flag into the existing health DTO)
+  — distinguish `Granted` / `Denied` / `NotDetermined`.
+- When not `Granted`, show the existing top **banner** (rust / `hn-soft` tokens, same component as
+  the Claude banner): *"Notifications are off — enable them in System Settings › Notifications ›
+  hn-watch to get alerts when new matches land."* Optional button opens the pane via the already-
+  registered opener plugin: `open "x-apple.systempreferences:com.apple.Notifications-Settings.extension"`.
+- **Re-check** on window focus / a manual button (mirror the Claude Re-check) so flipping it on in
+  System Settings clears the banner without a restart.
+- Keep `.show()` best-effort — this is purely about making the off-state **visible + recoverable**,
+  not changing delivery.
+
+**Verification gotcha (read before testing).** computer-use screenshots black out the
+NotificationCenter banner layer **and** macOS suppresses banners while the app is frontmost — verify
+delivery with `screencapture -x` and the app backgrounded. See `STATUS.md` (Session 8) and the
+`hn-watch-notification-verify-gotcha` memory.
+
+**Reuses.** The Claude-health banner + Re-check pattern (`feat/error-handling-preflight`, Session 5),
+`tauri-plugin-opener` (already registered), existing design tokens.
+
+**Acceptance.** On a machine where notification permission is denied/off, the app shows a clear,
+dismissible "notifications are off + how to enable" banner instead of silently never notifying;
+enabling it in System Settings and re-checking clears the banner; when permission is granted there is
+no banner and notifications deliver as today.
+
+---
+
+_Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / preflight) done
+(Session 5); #2 (lossless ingestion) done (Session 6).** **#4 (sleep/wake catch-up) — WON'T DO**
+(Session 7: monotonic stopwatch scheduling is intentional; wall-clock rewrite + active-time
+persistence both rejected as over-engineering). Phase 3 (tray + native notifications) shipped
+(Session 8). **Open backlog: #5 (surface the notification-denied state).** The other still-unbuilt
+core requirement lives in `STATUS.md`: the dig-deeper research swarm._
