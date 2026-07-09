@@ -7,6 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+/// What one tick did: how many stories it scanned and how many new matches it inserted.
+pub struct TickOutcome {
+    pub checked: usize,
+    pub new: usize,
+}
+
 pub fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -46,11 +52,13 @@ pub fn build_feed_rows(
 }
 
 /// One tick: fetch recent HN, drop already-seen items, judge the rest with
-/// claude, persist matches, and record every judged id as seen. Returns the
-/// number of new matches inserted. Errors are propagated so the worker can log
-/// them; the worker keeps running regardless.
-pub async fn run_tick(db: &Arc<Mutex<Connection>>, monitor: &Monitor) -> Result<usize, String> {
+/// claude, persist matches, and record every judged id as seen. Returns a
+/// TickOutcome with how many stories were scanned and how many new matches were
+/// inserted. Errors are propagated so the worker can log them; the worker keeps
+/// running regardless.
+pub async fn run_tick(db: &Arc<Mutex<Connection>>, monitor: &Monitor) -> Result<TickOutcome, String> {
     let recent = hn::fetch_recent(30).await?;
+    let checked = recent.len();
 
     let seen = {
         let conn = db.lock().map_err(|_| "db poisoned".to_string())?;
@@ -58,7 +66,7 @@ pub async fn run_tick(db: &Arc<Mutex<Connection>>, monitor: &Monitor) -> Result<
     };
     let unseen = select_unseen(recent, &seen);
     if unseen.is_empty() {
-        return Ok(0);
+        return Ok(TickOutcome { checked, new: 0 });
     }
 
     let verdicts = agent::judge(&monitor.prompt, &unseen).await?;
@@ -71,7 +79,7 @@ pub async fn run_tick(db: &Arc<Mutex<Connection>>, monitor: &Monitor) -> Result<
     for item in &unseen {
         db::mark_seen(&conn, &monitor.id, &item.hn_id).map_err(|e| e.to_string())?;
     }
-    Ok(rows.len())
+    Ok(TickOutcome { checked, new: rows.len() })
 }
 
 #[cfg(test)]

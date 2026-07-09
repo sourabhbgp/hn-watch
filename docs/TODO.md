@@ -6,7 +6,13 @@ detail to act on cold. Source of truth for scope remains [`docs/REQUIREMENTS.md`
 
 ---
 
-## 1. Tick observability — the app must show what it's doing
+## 1. Tick observability — the app must show what it's doing  ✅ SHIPPED (Session 4)
+
+> Done on `feat/tick-observability` — live `next in Xm` countdown, `Checking…`/`error` chips, a
+> `Last checked H:MM · scanned · new` status line, and a check-aware feed empty-state, backed by
+> persisted per-tick results. Paused/catching-up chips remain deferred to #3/#4. The rest of this
+> entry is kept for history. See `STATUS.md` (Session 4) and
+> `docs/superpowers/specs/2026-07-09-tick-observability-design.md`.
 
 **Problem.** Today a monitor is a black box. When you create one there is no loading
 indicator, no "checking…" state, no "last checked" time, and no "0 new" message. If a tick
@@ -139,7 +145,7 @@ and (with #2) no stories missed. Suspend→wake and quit→relaunch behave ident
 
 ---
 
-_Order to tackle: #3 (make failures visible / preflight) and #1 (observability, incl. the live
-countdown + status chips) pair naturally and are the highest user-facing value; #4 (sleep/wake
-catch-up) makes the schedule trustworthy on a laptop and shares plumbing with #1; #2 (lossless
-ingestion) is the correctness upgrade for scale. Do them one per session._
+_Order to tackle: **#1 (observability) is done (Session 4).** Next: #3 (make failures visible /
+preflight) pairs naturally with #1 and adds the `Paused` chip; #4 (sleep/wake catch-up) makes the
+schedule trustworthy on a laptop, shares plumbing with #1, and adds the `Resumed · catching up`
+chip; #2 (lossless ingestion) is the correctness upgrade for scale. Do them one per session._

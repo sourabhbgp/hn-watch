@@ -10,6 +10,11 @@ export interface Monitor {
   intervalLabel: string; // e.g. "every 30m"
   status: MonitorStatus;
   matchCount: number;
+  lastCheckedAt: number | null; // epoch seconds
+  nextCheckAt: number | null; // epoch seconds
+  lastCheckedCount: number | null;
+  lastNewCount: number | null;
+  lastError: string | null;
 }
 
 export interface FeedItem {

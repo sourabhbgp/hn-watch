@@ -8,6 +8,10 @@ pub struct Monitor {
     pub prompt: String,
     pub interval_secs: i64,
     pub created_at: i64,
+    pub last_checked_at: Option<i64>,
+    pub last_checked_count: Option<i64>,
+    pub last_new_count: Option<i64>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +27,21 @@ pub struct FeedRow {
     pub hn_score: i64,
     pub hn_comments: i64,
     pub created_at: i64,
+}
+
+/// Add `column` to `table` only if it isn't already present. SQLite has no
+/// `ADD COLUMN IF NOT EXISTS`, and existing on-disk DBs must upgrade safely.
+/// table/column/decl are static literals here (never user input).
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> rusqlite::Result<()> {
+    let present = conn
+        .prepare(&format!("PRAGMA table_info({table})"))?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == column);
+    if !present {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+    }
+    Ok(())
 }
 
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -54,7 +73,12 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              hn_id TEXT NOT NULL,
              PRIMARY KEY (monitor_id, hn_id)
          );",
-    )
+    )?;
+    ensure_column(conn, "monitors", "last_checked_at", "INTEGER")?;
+    ensure_column(conn, "monitors", "last_checked_count", "INTEGER")?;
+    ensure_column(conn, "monitors", "last_new_count", "INTEGER")?;
+    ensure_column(conn, "monitors", "last_error", "TEXT")?;
+    Ok(())
 }
 
 pub fn insert_monitor(conn: &Connection, m: &Monitor) -> rusqlite::Result<()> {
@@ -68,7 +92,9 @@ pub fn insert_monitor(conn: &Connection, m: &Monitor) -> rusqlite::Result<()> {
 
 pub fn list_monitors(conn: &Connection) -> rusqlite::Result<Vec<Monitor>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, prompt, interval_secs, created_at FROM monitors ORDER BY created_at ASC",
+        "SELECT id, name, prompt, interval_secs, created_at,
+                last_checked_at, last_checked_count, last_new_count, last_error
+         FROM monitors ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(Monitor {
@@ -77,6 +103,10 @@ pub fn list_monitors(conn: &Connection) -> rusqlite::Result<Vec<Monitor>> {
             prompt: r.get(2)?,
             interval_secs: r.get(3)?,
             created_at: r.get(4)?,
+            last_checked_at: r.get(5)?,
+            last_checked_count: r.get(6)?,
+            last_new_count: r.get(7)?,
+            last_error: r.get(8)?,
         })
     })?;
     rows.collect()
@@ -151,6 +181,25 @@ pub fn mark_seen(conn: &Connection, monitor_id: &str, hn_id: &str) -> rusqlite::
     Ok(())
 }
 
+/// Record the outcome of one tick. Passing `error: None` clears any prior error.
+pub fn record_tick(
+    conn: &Connection,
+    monitor_id: &str,
+    checked: i64,
+    new: i64,
+    error: Option<&str>,
+    now: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE monitors
+         SET last_checked_at = ?2, last_checked_count = ?3,
+             last_new_count = ?4, last_error = ?5
+         WHERE id = ?1",
+        rusqlite::params![monitor_id, now, checked, new, error],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +217,10 @@ mod tests {
             prompt: "ai agents".into(),
             interval_secs: 1800,
             created_at: 100,
+            last_checked_at: None,
+            last_checked_count: None,
+            last_new_count: None,
+            last_error: None,
         }
     }
 
@@ -232,5 +285,51 @@ mod tests {
         row.id = "f2".into(); // different row id, same (monitor_id, hn_id)
         insert_feed_item(&c, &row).unwrap();
         assert_eq!(count_matches(&c, "m1").unwrap(), 1);
+    }
+
+    #[test]
+    fn record_tick_stores_and_clears_error() {
+        let c = mem();
+        insert_monitor(&c, &sample_monitor("m1")).unwrap();
+        record_tick(&c, "m1", 10, 0, Some("claude timed out"), 111).unwrap();
+        let m = list_monitors(&c).unwrap().pop().unwrap();
+        assert_eq!(m.last_checked_at, Some(111));
+        assert_eq!(m.last_checked_count, Some(10));
+        assert_eq!(m.last_error, Some("claude timed out".into()));
+        // a later success clears the error
+        record_tick(&c, "m1", 12, 3, None, 222).unwrap();
+        let m = list_monitors(&c).unwrap().pop().unwrap();
+        assert_eq!(m.last_error, None);
+        assert_eq!(m.last_new_count, Some(3));
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        migrate(&c).unwrap(); // second run must not error on ADD COLUMN
+        insert_monitor(&c, &sample_monitor("m1")).unwrap();
+        record_tick(&c, "m1", 30, 2, None, 555).unwrap();
+        let m = list_monitors(&c).unwrap().pop().unwrap();
+        assert_eq!(m.last_checked_count, Some(30));
+    }
+
+    #[test]
+    fn migrate_upgrades_preexisting_db_without_new_columns() {
+        let c = Connection::open_in_memory().unwrap();
+        // simulate an old (pre-observability) schema
+        c.execute_batch(
+            "CREATE TABLE monitors (
+                 id TEXT PRIMARY KEY, name TEXT NOT NULL, prompt TEXT NOT NULL,
+                 interval_secs INTEGER NOT NULL, created_at INTEGER NOT NULL);",
+        ).unwrap();
+        c.execute("INSERT INTO monitors VALUES ('m1','n','p',1800,100)", []).unwrap();
+        migrate(&c).unwrap(); // must ADD the 4 columns, keep the row
+        let m = list_monitors(&c).unwrap().pop().unwrap();
+        assert_eq!(m.id, "m1");
+        assert_eq!(m.last_checked_at, None);
+        record_tick(&c, "m1", 5, 1, Some("boom"), 200).unwrap();
+        let m = list_monitors(&c).unwrap().pop().unwrap();
+        assert_eq!(m.last_error, Some("boom".into()));
     }
 }

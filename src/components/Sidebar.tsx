@@ -14,31 +14,76 @@ const INTERVAL_OPTIONS: { label: string; secs: number }[] = [
   { label: "every 6h", secs: 21600 },
 ];
 
+function fmtClock(epoch: number): string {
+  return new Date(epoch * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function fmtCountdown(nextCheckAt: number | null, now: number): string {
+  if (nextCheckAt == null) return "scheduling…";
+  const rem = nextCheckAt - now;
+  if (rem <= 0) return "due now";
+  if (rem < 60) return "next in <1m";
+  return `next in ${Math.round(rem / 60)}m`;
+}
+
 function MonitorRow({
   monitor,
   selected,
+  now,
+  checking,
   onSelect,
   onDelete,
 }: {
   monitor: Monitor;
   selected: boolean;
+  now: number;
+  checking: boolean;
   onSelect: () => void;
   onDelete: () => void;
 }) {
+  // Quiet "heartbeat" pill on the name row: grey countdown by default, alive
+  // (hn-soft + pulse) while a tick runs, rust when the last tick errored.
+  const chip = checking ? (
+    <span className="flex shrink-0 items-center gap-1 rounded-full bg-hn-soft px-2 py-0.5 font-mono text-[10px] text-rust">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-rust" />
+      Checking…
+    </span>
+  ) : monitor.status === "error" ? (
+    <span
+      title={monitor.lastError ?? ""}
+      className="shrink-0 rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-rust"
+    >
+      error
+    </span>
+  ) : (
+    <span className="shrink-0 rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-faint">
+      {fmtCountdown(monitor.nextCheckAt, now)}
+    </span>
+  );
+
+  // One calm meta line: total matches, then either the failure note or the
+  // last-checked time. "· N new" only appears (in brand orange) when a tick
+  // actually brought new matches — the scanned count lives in the hover title.
+  const matches = `${monitor.matchCount} ${monitor.matchCount === 1 ? "match" : "matches"}`;
+  const newCount = monitor.lastNewCount ?? 0;
+  const checkedAt = monitor.lastCheckedAt;
+
   return (
     <div
-      className={`group w-full rounded-lg px-3 py-2.5 transition-colors border ${
-        selected ? "bg-hn-soft border-hn-border" : "bg-transparent border-transparent hover:bg-card"
+      className={`group w-full rounded-lg border px-3 py-2.5 transition-colors ${
+        selected ? "border-hn-border bg-hn-soft" : "border-line bg-card/70 hover:bg-card"
       }`}
     >
+      {/* name row — status dot · name · countdown/Checking…/error · delete on hover */}
       <div className="flex items-center gap-2">
         <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[monitor.status]}`} />
-        <button onClick={onSelect} className="truncate text-left text-[13.5px] font-semibold text-ink">
+        <button
+          onClick={onSelect}
+          className="min-w-0 flex-1 truncate text-left text-[13.5px] font-semibold text-ink"
+        >
           {monitor.name}
         </button>
-        <span className="ml-auto shrink-0 rounded-full bg-paper px-1.5 py-0.5 font-mono text-[10px] text-faint">
-          {monitor.matchCount}
-        </span>
+        {chip}
         <button
           onClick={onDelete}
           title="Delete monitor"
@@ -47,9 +92,28 @@ function MonitorRow({
           ×
         </button>
       </div>
+
       <button onClick={onSelect} className="block w-full text-left">
-        <p className="mt-1 line-clamp-2 pl-4 text-[11.5px] leading-snug text-faint">{monitor.prompt}</p>
-        <p className="mt-1 pl-4 font-mono text-[10.5px] text-faint">{monitor.intervalLabel}</p>
+        <p className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-faint">{monitor.prompt}</p>
+
+        {checkedAt != null && (
+          <p
+            title={
+              monitor.lastError ?? `scanned ${monitor.lastCheckedCount ?? 0} stories this check`
+            }
+            className="mt-1.5 truncate font-mono text-[10.5px] text-faint"
+          >
+            {matches}
+            {monitor.lastError ? (
+              <span className="text-rust"> · last check failed</span>
+            ) : (
+              <>
+                {newCount > 0 && <span className="font-medium text-hn"> · {newCount} new</span>}
+                {` · checked ${fmtClock(checkedAt)}`}
+              </>
+            )}
+          </p>
+        )}
       </button>
     </div>
   );
@@ -61,12 +125,16 @@ export function Sidebar({
   onSelect,
   onCreate,
   onDelete,
+  now,
+  checkingIds,
 }: {
   monitors: Monitor[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   onCreate: (name: string, prompt: string, intervalSecs: number) => void;
   onDelete: (id: string) => void;
+  now: number;
+  checkingIds: Set<string>;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -83,7 +151,7 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-line bg-card/40">
+    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-line bg-card/40">
       <div className="flex items-center gap-2.5 px-4 py-4">
         <div className="h-8 w-8 shrink-0 rounded-lg bg-hn grid place-items-center">
           <svg viewBox="216 216 592 592" className="h-6 w-6" aria-hidden="true">
@@ -124,6 +192,8 @@ export function Sidebar({
             key={m.id}
             monitor={m}
             selected={selectedId === m.id}
+            now={now}
+            checking={checkingIds.has(m.id)}
             onSelect={() => onSelect(m.id)}
             onDelete={() => onDelete(m.id)}
           />

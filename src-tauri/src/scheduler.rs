@@ -6,6 +6,23 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
+use crate::db;
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TickStarted {
+    monitor_id: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TickFinished {
+    monitor_id: String,
+    checked_count: i64,
+    new_count: i64,
+    error: Option<String>,
+}
+
 pub struct Scheduler {
     handles: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
 }
@@ -21,15 +38,43 @@ impl Scheduler {
         let id = monitor.id.clone();
         let handle = tauri::async_runtime::spawn(async move {
             loop {
-                match tick::run_tick(&db, &monitor).await {
-                    Ok(n) if n > 0 => {
-                        if let Err(e) = app.emit("feed-updated", ()) {
-                            eprintln!("[hn-watch] emit failed for {}: {e}", monitor.id);
+                let _ = app.emit("tick-started", TickStarted { monitor_id: monitor.id.clone() });
+
+                let result = tick::run_tick(&db, &monitor).await;
+                // Record at finish time so next_check_at aligns with the sleep(interval) below.
+                let now = tick::now_secs();
+                let (checked, new, error) = match &result {
+                    Ok(o) => (o.checked as i64, o.new as i64, None),
+                    Err(e) => {
+                        eprintln!("[hn-watch] tick failed for {}: {e}", monitor.id);
+                        (0i64, 0i64, Some(e.clone()))
+                    }
+                };
+
+                match db.lock() {
+                    Ok(conn) => {
+                        if let Err(e) =
+                            db::record_tick(&conn, &monitor.id, checked, new, error.as_deref(), now)
+                        {
+                            eprintln!("[hn-watch] record_tick failed for {}: {e}", monitor.id);
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("[hn-watch] tick failed for {}: {e}", monitor.id),
+                    Err(_) => eprintln!("[hn-watch] db poisoned; skipped record_tick for {}", monitor.id),
                 }
+
+                if new > 0 {
+                    let _ = app.emit("feed-updated", ());
+                }
+                let _ = app.emit(
+                    "tick-finished",
+                    TickFinished {
+                        monitor_id: monitor.id.clone(),
+                        checked_count: checked,
+                        new_count: new,
+                        error,
+                    },
+                );
+
                 tokio::time::sleep(interval).await;
             }
         });
