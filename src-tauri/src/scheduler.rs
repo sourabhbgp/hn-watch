@@ -1,3 +1,4 @@
+use crate::agent::ClaudeHealth;
 use crate::db::Monitor;
 use crate::tick;
 use rusqlite::Connection;
@@ -12,6 +13,13 @@ use crate::db;
 #[serde(rename_all = "camelCase")]
 struct TickStarted {
     monitor_id: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeHealthPayload {
+    status: String,
+    message: String,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -33,7 +41,15 @@ impl Scheduler {
     }
 
     /// Spawn a long-lived worker: tick immediately, then every `interval_secs`.
-    pub fn spawn(&self, app: AppHandle, db: Arc<Mutex<Connection>>, monitor: Monitor) {
+    /// `health` is the shared global Claude state — this worker flips it to
+    /// Missing/NotAuthenticated on those failures and clears it on success.
+    pub fn spawn(
+        &self,
+        app: AppHandle,
+        db: Arc<Mutex<Connection>>,
+        health: Arc<Mutex<ClaudeHealth>>,
+        monitor: Monitor,
+    ) {
         let interval = Duration::from_secs(monitor.interval_secs.max(1) as u64);
         let id = monitor.id.clone();
         let handle = tauri::async_runtime::spawn(async move {
@@ -41,25 +57,57 @@ impl Scheduler {
                 let _ = app.emit("tick-started", TickStarted { monitor_id: monitor.id.clone() });
 
                 let result = tick::run_tick(&db, &monitor).await;
-                // Record at finish time so next_check_at aligns with the sleep(interval) below.
                 let now = tick::now_secs();
-                let (checked, new, error) = match &result {
-                    Ok(o) => (o.checked as i64, o.new as i64, None),
+                let (checked, new, error, code) = match &result {
+                    Ok(o) => (o.checked as i64, o.new as i64, None, None),
                     Err(e) => {
-                        eprintln!("[hn-watch] tick failed for {}: {e}", monitor.id);
-                        (0i64, 0i64, Some(e.clone()))
+                        eprintln!(
+                            "[hn-watch] tick failed for {}: {} ({})",
+                            monitor.id,
+                            e.message(),
+                            e.code()
+                        );
+                        (0i64, 0i64, Some(e.message()), Some(e.code()))
                     }
                 };
 
                 match db.lock() {
                     Ok(conn) => {
-                        if let Err(e) =
-                            db::record_tick(&conn, &monitor.id, checked, new, error.as_deref(), now)
-                        {
+                        if let Err(e) = db::record_tick(
+                            &conn,
+                            &monitor.id,
+                            checked,
+                            new,
+                            error.as_deref(),
+                            now,
+                        ) {
                             eprintln!("[hn-watch] record_tick failed for {}: {e}", monitor.id);
                         }
                     }
-                    Err(_) => eprintln!("[hn-watch] db poisoned; skipped record_tick for {}", monitor.id),
+                    Err(_) => {
+                        eprintln!("[hn-watch] db poisoned; skipped record_tick for {}", monitor.id)
+                    }
+                }
+
+                // Global Claude health: only claude_missing / claude_auth flip it;
+                // success clears it; a transient error leaves it unchanged.
+                if let Ok(mut h) = health.lock() {
+                    let next = match code {
+                        Some("claude_missing") => ClaudeHealth::Missing,
+                        Some("claude_auth") => ClaudeHealth::NotAuthenticated,
+                        None => ClaudeHealth::Ok,
+                        _ => h.clone(),
+                    };
+                    if *h != next {
+                        *h = next.clone();
+                        let _ = app.emit(
+                            "claude-health",
+                            ClaudeHealthPayload {
+                                status: next.code().into(),
+                                message: next.message(),
+                            },
+                        );
+                    }
                 }
 
                 if new > 0 {
