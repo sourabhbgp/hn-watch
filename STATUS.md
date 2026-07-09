@@ -212,6 +212,22 @@ stale non-Claude (`hn_error`) one — it re-populates on the next tick if still 
 (still mock in the UI). Remaining backlog refinement: TODO #4 (sleep/wake wall-clock catch-up) — its
 catch-up tick will already be lossless now that ingestion is watermark-based.
 
+## Session 7 — Countdown label polish (stopwatch scheduling affirmed)
+
+**Decided (no build):** the monotonic "stopwatch" scheduling is **intentional**, not a bug. Confirmed
+the current behavior already matches the desired model with **no backend change**: on app start every
+monitor does a **fresh run**, then ticks every interval on a monotonic timer that **freezes during
+laptop sleep** (resumes the leftover, never rushes); stopwatch progress is **not** persisted across an
+app close (a close discards the in-flight timer, a relaunch does a fresh run). TODO #4's wall-clock
+catch-up rewrite and an "active-time" heartbeat were both considered and **rejected as over-engineering**.
+
+**Done** — the one cosmetic seam left in that flow:
+
+- [x] Countdown pill now shows a calm **`checking soon…`** instead of a stuck **`due now`** when a
+      monitor is past its wall-clock due time (the window where the monotonic timer, paused across a
+      laptop sleep, is still catching up). Pure one-line frontend change in `Sidebar.tsx`
+      (`fmtCountdown`); no backend, no new state, no new design tokens. `tsc` + `vite build` clean.
+
 ## How to run
 
 ```bash

@@ -21,7 +21,10 @@ function fmtClock(epoch: number): string {
 function fmtCountdown(nextCheckAt: number | null, now: number): string {
   if (nextCheckAt == null) return "scheduling…";
   const rem = nextCheckAt - now;
-  if (rem <= 0) return "due now";
+  // Past its wall-clock due time — the check runs on a monotonic timer that
+  // pauses across laptop sleep, so it can be a little behind here. Show a calm
+  // "checking soon…" rather than a stuck "due now".
+  if (rem <= 0) return "checking soon…";
   if (rem < 60) return "next in <1m";
   return `next in ${Math.round(rem / 60)}m`;
 }
