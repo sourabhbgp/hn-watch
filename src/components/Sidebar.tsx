@@ -26,20 +26,6 @@ function fmtCountdown(nextCheckAt: number | null, now: number): string {
   return `next in ${Math.round(rem / 60)}m`;
 }
 
-// When the monitor last ran (or its non-running state). Decoupled from the chip
-// so it doesn't flicker while a tick is in flight.
-function timeLine(m: Monitor): string {
-  if (m.lastError) return "Last check failed";
-  if (m.lastCheckedAt == null) return "Never checked";
-  return `Last checked ${fmtClock(m.lastCheckedAt)}`;
-}
-
-// That tick's counts — only meaningful once a tick has succeeded.
-function statsLine(m: Monitor): string | null {
-  if (m.lastError || m.lastCheckedAt == null) return null;
-  return `${m.lastCheckedCount ?? 0} scanned · ${m.lastNewCount ?? 0} new`;
-}
-
 function MonitorRow({
   monitor,
   selected,
@@ -55,33 +41,40 @@ function MonitorRow({
   onSelect: () => void;
   onDelete: () => void;
 }) {
+  // Quiet "heartbeat" pill on the name row: grey countdown by default, alive
+  // (hn-soft + pulse) while a tick runs, rust when the last tick errored.
   const chip = checking ? (
-    <span className="rounded-full bg-hn-soft px-2 py-0.5 font-mono text-[10px] text-rust">
-      <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-rust align-middle" />
+    <span className="flex shrink-0 items-center gap-1 rounded-full bg-hn-soft px-2 py-0.5 font-mono text-[10px] text-rust">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-rust" />
       Checking…
     </span>
   ) : monitor.status === "error" ? (
     <span
       title={monitor.lastError ?? ""}
-      className="rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-rust"
+      className="shrink-0 rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-rust"
     >
       error
     </span>
   ) : (
-    <span className="rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-faint">
+    <span className="shrink-0 rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-faint">
       {fmtCountdown(monitor.nextCheckAt, now)}
     </span>
   );
 
-  const stats = statsLine(monitor);
+  // One calm meta line: total matches, then either the failure note or the
+  // last-checked time. "· N new" only appears (in brand orange) when a tick
+  // actually brought new matches — the scanned count lives in the hover title.
+  const matches = `${monitor.matchCount} ${monitor.matchCount === 1 ? "match" : "matches"}`;
+  const newCount = monitor.lastNewCount ?? 0;
+  const checkedAt = monitor.lastCheckedAt;
 
   return (
     <div
-      className={`group w-full rounded-lg px-3 py-2.5 transition-colors border ${
-        selected ? "bg-hn-soft border-hn-border" : "bg-transparent border-transparent hover:bg-card"
+      className={`group w-full rounded-lg border px-3 py-2.5 transition-colors ${
+        selected ? "border-hn-border bg-hn-soft" : "border-line bg-card/70 hover:bg-card"
       }`}
     >
-      {/* line 1 — status dot · name (takes the row) · delete on hover */}
+      {/* name row — status dot · name · countdown/Checking…/error · delete on hover */}
       <div className="flex items-center gap-2">
         <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[monitor.status]}`} />
         <button
@@ -90,6 +83,7 @@ function MonitorRow({
         >
           {monitor.name}
         </button>
+        {chip}
         <button
           onClick={onDelete}
           title="Delete monitor"
@@ -100,20 +94,26 @@ function MonitorRow({
       </div>
 
       <button onClick={onSelect} className="block w-full text-left">
-        {/* line 2 — prompt */}
         <p className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-faint">{monitor.prompt}</p>
 
-        {/* line 3 — chip (countdown / Checking… / error) · total matches */}
-        <div className="mt-2 flex items-center justify-between gap-2">
-          {chip}
-          <span className="shrink-0 font-mono text-[10px] text-faint">
-            {monitor.matchCount} {monitor.matchCount === 1 ? "match" : "matches"}
-          </span>
-        </div>
-
-        {/* line 4 — when it last ran; line 5 — that tick's counts (each on its own row, never clipped) */}
-        <p className="mt-1.5 font-mono text-[10.5px] text-faint">{timeLine(monitor)}</p>
-        {stats && <p className="mt-0.5 font-mono text-[10.5px] text-faint">{stats}</p>}
+        {checkedAt != null && (
+          <p
+            title={
+              monitor.lastError ?? `scanned ${monitor.lastCheckedCount ?? 0} stories this check`
+            }
+            className="mt-1.5 truncate font-mono text-[10.5px] text-faint"
+          >
+            {matches}
+            {monitor.lastError ? (
+              <span className="text-rust"> · last check failed</span>
+            ) : (
+              <>
+                {newCount > 0 && <span className="font-medium text-hn"> · {newCount} new</span>}
+                {` · checked ${fmtClock(checkedAt)}`}
+              </>
+            )}
+          </p>
+        )}
       </button>
     </div>
   );
