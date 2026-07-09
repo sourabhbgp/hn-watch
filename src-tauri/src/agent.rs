@@ -175,6 +175,80 @@ fn is_auth_failure(stderr: &str) -> bool {
         || s.contains("unauthorized")
 }
 
+/// Global Claude availability, seeded at startup and kept live by ticks.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClaudeHealth {
+    Ok,
+    Missing,
+    NotAuthenticated,
+}
+
+impl ClaudeHealth {
+    pub fn code(&self) -> &'static str {
+        match self {
+            ClaudeHealth::Ok => "ok",
+            ClaudeHealth::Missing => "missing",
+            ClaudeHealth::NotAuthenticated => "notAuthenticated",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            ClaudeHealth::Ok => String::new(),
+            ClaudeHealth::Missing => {
+                "Claude Code not found — HN Watch needs it to judge stories. \
+                 Install Claude Code, then Re-check."
+                    .into()
+            }
+            ClaudeHealth::NotAuthenticated => {
+                "Claude Code isn't logged in — run `claude` in a terminal to log in, \
+                 then Re-check."
+                    .into()
+            }
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        matches!(self, ClaudeHealth::Ok)
+    }
+}
+
+/// Pure: map `claude auth status --json` output to a health state.
+/// non-zero exit → NotAuthenticated (logged-out exits 1); exit 0 with
+/// `{"loggedIn": false}` → NotAuthenticated; anything else on exit 0 → Ok
+/// (unparseable output must not false-alarm).
+pub fn classify_auth(success: bool, stdout: &str) -> ClaudeHealth {
+    if !success {
+        return ClaudeHealth::NotAuthenticated;
+    }
+    match serde_json::from_str::<serde_json::Value>(stdout) {
+        Ok(v) if v.get("loggedIn").and_then(|b| b.as_bool()) == Some(false) => {
+            ClaudeHealth::NotAuthenticated
+        }
+        _ => ClaudeHealth::Ok,
+    }
+}
+
+/// Startup / re-check probe. Cheap: `claude auth status --json` makes NO model
+/// call. Binary absent → Missing without spawning; probe that itself fails to
+/// run / times out → Ok (don't false-alarm — real ticks surface genuine errors).
+pub async fn preflight() -> ClaudeHealth {
+    if !claude_present() {
+        return ClaudeHealth::Missing;
+    }
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        claude_command().arg("auth").arg("status").arg("--json").output(),
+    )
+    .await;
+    match probe {
+        Ok(Ok(output)) => {
+            classify_auth(output.status.success(), &String::from_utf8_lossy(&output.stdout))
+        }
+        _ => ClaudeHealth::Ok,
+    }
+}
+
 pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, AgentError> {
     if items.is_empty() {
         return Ok(Vec::new());
@@ -257,6 +331,27 @@ mod tests {
         assert_eq!(AgentError::Failed("x".into()).code(), "claude_error");
         assert!(AgentError::Timeout.message().contains("timed out"));
         assert!(AgentError::NotAuthenticated.message().contains("logged in"));
+    }
+
+    #[test]
+    fn classify_auth_states() {
+        assert_eq!(classify_auth(true, r#"{"loggedIn":true}"#), ClaudeHealth::Ok);
+        assert_eq!(classify_auth(true, r#"{"loggedIn":false}"#), ClaudeHealth::NotAuthenticated);
+        assert_eq!(classify_auth(false, ""), ClaudeHealth::NotAuthenticated);
+        // unparseable stdout on a zero exit must NOT false-alarm
+        assert_eq!(classify_auth(true, "not json at all"), ClaudeHealth::Ok);
+    }
+
+    #[test]
+    fn claude_health_projection() {
+        assert_eq!(ClaudeHealth::Ok.code(), "ok");
+        assert_eq!(ClaudeHealth::Missing.code(), "missing");
+        assert_eq!(ClaudeHealth::NotAuthenticated.code(), "notAuthenticated");
+        assert!(ClaudeHealth::Ok.is_ok());
+        assert!(!ClaudeHealth::Missing.is_ok());
+        assert!(ClaudeHealth::Missing.message().contains("not found"));
+        assert!(ClaudeHealth::NotAuthenticated.message().contains("logged in"));
+        assert!(ClaudeHealth::Ok.message().is_empty());
     }
 
     #[test]
