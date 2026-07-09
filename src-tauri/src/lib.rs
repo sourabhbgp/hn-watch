@@ -21,14 +21,14 @@ pub fn run() {
             // Menu-bar tray icon (Show / Quit) — keeps the app alive with the window closed.
             tray::build(app.handle())?;
 
-            // Ask for notification permission up front (macOS shows the OS prompt once).
-            {
-                use tauri_plugin_notification::{NotificationExt, PermissionState};
-                let n = app.notification();
-                if !matches!(n.permission_state(), Ok(PermissionState::Granted)) {
-                    let _ = n.request_permission();
-                }
-            }
+            // No explicit notification-permission request here: on desktop,
+            // tauri-plugin-notification stubs both `request_permission()` and
+            // `permission_state()` to always return `Granted` without touching the
+            // OS (see desktop.rs in the crate), so an up-front request is a no-op.
+            // macOS instead prompts the user the first time a notification is
+            // actually delivered (via `notify_rust` in scheduler.rs). Detecting a
+            // *denied* state would require a native UNUserNotificationCenter query —
+            // no Tauri plugin exposes it on desktop (see TODO #5, descoped).
 
             // Close-to-tray: the red button / Cmd-W hides the window instead of
             // quitting, so monitor workers keep ticking. Quit lives in the tray menu.
