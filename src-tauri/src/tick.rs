@@ -117,17 +117,23 @@ impl TickError {
     }
 }
 
-/// One tick: fetch recent HN, drop already-seen items, judge the rest with
-/// claude, persist matches, and record every judged id as seen. Returns a
-/// TickOutcome with how many stories were scanned and how many new matches were
-/// inserted. Errors are propagated so the worker can log them; the worker keeps
-/// running regardless.
+/// One tick: fetch every HN story since this monitor's watermark (or the last hour on the
+/// first tick), drop already-seen items, judge the rest with `claude` in `BATCH_SIZE` chunks
+/// (sequential within the tick, bounded by the shared agent semaphore), persist matches, mark
+/// every judged id seen, and advance the watermark — in that order so a crash before the
+/// watermark write is safe (the window is re-fetched and `seen` dedupes it). Fail-closed: any
+/// batch failure returns Err before any DB write, and the whole window is re-judged next tick.
 pub async fn run_tick(
     db: &Arc<Mutex<Connection>>,
     monitor: &Monitor,
 ) -> Result<TickOutcome, TickError> {
-    let recent = hn::fetch_since(now_secs() - 3600).await.map_err(TickError::Hn)?;
+    let now = now_secs();
+    let since = monitor.watermark.unwrap_or(now - LOOKBACK_SECS);
+
+    let recent = dedupe_by_hn_id(hn::fetch_since(since).await.map_err(TickError::Hn)?);
     let checked = recent.len();
+    // Compute the next watermark from the full fetched window before `select_unseen` consumes it.
+    let new_watermark = advance_watermark(monitor.watermark, &recent, WATERMARK_MARGIN_SECS, now);
 
     let seen = {
         let conn = db.lock().map_err(|_| TickError::Db("db poisoned".into()))?;
@@ -138,17 +144,26 @@ pub async fn run_tick(
         return Ok(TickOutcome { checked, new: 0, agent_ran: false });
     }
 
-    let verdicts = agent::judge(&monitor.prompt, &unseen)
-        .await
-        .map_err(TickError::Agent)?;
-    let rows = build_feed_rows(&monitor.id, &unseen, &verdicts, now_secs());
+    // Judge in chunks; fail-closed — the first batch error aborts before any DB write.
+    let mut verdicts: Vec<Verdict> = Vec::new();
+    for batch in unseen.chunks(BATCH_SIZE) {
+        let batch_verdicts = agent::judge(&monitor.prompt, batch)
+            .await
+            .map_err(TickError::Agent)?;
+        verdicts.extend(batch_verdicts);
+    }
+    let rows = build_feed_rows(&monitor.id, &unseen, &verdicts, now);
 
+    // Commit order: insert -> mark seen -> advance watermark (LAST). See doc comment.
     let conn = db.lock().map_err(|_| TickError::Db("db poisoned".into()))?;
     for row in &rows {
         db::insert_feed_item(&conn, row).map_err(|e| TickError::Db(e.to_string()))?;
     }
     for item in &unseen {
         db::mark_seen(&conn, &monitor.id, &item.hn_id).map_err(|e| TickError::Db(e.to_string()))?;
+    }
+    if let Some(wm) = new_watermark {
+        db::set_watermark(&conn, &monitor.id, wm).map_err(|e| TickError::Db(e.to_string()))?;
     }
     Ok(TickOutcome { checked, new: rows.len(), agent_ran: true })
 }
