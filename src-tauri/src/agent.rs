@@ -45,12 +45,46 @@ fn claude_candidates() -> Vec<PathBuf> {
     dirs
 }
 
-/// Resolved absolute path to the `claude` binary, computed once. Falls back to
-/// the bare name "claude" (PATH resolution) if nothing is found.
+/// Env override for tests / live-verification: point at a fake `claude` script.
+const CLAUDE_BIN_ENV: &str = "HN_WATCH_CLAUDE_BIN";
+
+/// Resolved absolute path to the `claude` binary. Honors `HN_WATCH_CLAUDE_BIN`
+/// (uncached, for tests), else the cached PATH/common-dir resolution, else the
+/// bare name "claude".
 fn claude_bin() -> String {
-    static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Ok(p) = std::env::var(CLAUDE_BIN_ENV) {
+        if !p.is_empty() {
+            return p;
+        }
+    }
+    static BIN: OnceLock<String> = OnceLock::new();
     BIN.get_or_init(|| find_claude(claude_candidates()).unwrap_or_else(|| "claude".to_string()))
         .clone()
+}
+
+/// True when a real `claude` binary exists (not the bare-name fallback). Drives
+/// the preflight "Missing" state before we ever try to spawn.
+pub fn claude_present() -> bool {
+    if let Ok(p) = std::env::var(CLAUDE_BIN_ENV) {
+        if !p.is_empty() {
+            return std::path::Path::new(&p).exists();
+        }
+    }
+    find_claude(claude_candidates()).is_some()
+}
+
+/// Base command carrying the sandbox that keeps any `claude` call from reading
+/// the user's files / triggering a macOS TCC prompt: run from the temp dir, override
+/// $PWD (claude walks up from $PWD, not getcwd()), null stdin (else it waits ~3s for
+/// piped input), kill on drop. Callers append their own args.
+fn claude_command() -> tokio::process::Command {
+    let workdir = std::env::temp_dir();
+    let mut cmd = tokio::process::Command::new(claude_bin());
+    cmd.current_dir(&workdir)
+        .env("PWD", &workdir)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    cmd
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -109,31 +143,9 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
         .acquire()
         .await
         .map_err(|e| format!("semaphore closed: {e}"))?;
-    // This judge call is pure text-in / JSON-out — it must never read the user's
-    // files. Claude Code otherwise treats its surroundings as a project workspace
-    // and, for a Finder-launched bundle sitting under ~/Desktop, that triggers a
-    // macOS "access your Desktop folder" TCC prompt that blocks the tick. Three
-    // things keep it fully sandboxed while preserving the CLI's own keychain auth:
-    //   --safe-mode : start with all customizations off — no CLAUDE.md / memory /
-    //                 plugin / hook / MCP discovery (keeps OAuth/keychain auth,
-    //                 unlike --bare which forces an API key).
-    //   current_dir : run from the temp dir, not the inherited (Desktop) cwd.
-    //   env("PWD")  : Claude walks up from $PWD, NOT getcwd() — current_dir alone
-    //                 leaves the inherited $PWD (~/Desktop...) in place, so we must
-    //                 override it too or the tree-walk still reaches Desktop.
-    // stdin(null): claude -p otherwise waits ~3s for piped stdin on every call.
-    let workdir = std::env::temp_dir();
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(90),
-        tokio::process::Command::new(claude_bin())
-            .arg("-p")
-            .arg("--safe-mode")
-            .arg(&prompt)
-            .current_dir(&workdir)
-            .env("PWD", &workdir)
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output(),
+        claude_command().arg("-p").arg("--safe-mode").arg(&prompt).output(),
     )
     .await
     .map_err(|_| "claude timed out after 90s".to_string())?
