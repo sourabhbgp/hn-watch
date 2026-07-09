@@ -52,6 +52,14 @@ pub fn run() {
             commands::claude_health,
             commands::recheck_claude,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // macOS fires Reopen when the Dock icon is clicked while the app is
+            // running. Since close-to-tray only hides the window, re-show it here
+            // — otherwise the Dock icon looks dead and only the tray can restore.
+            if let tauri::RunEvent::Reopen { .. } = event {
+                tray::show_main_window(app_handle);
+            }
+        });
 }
