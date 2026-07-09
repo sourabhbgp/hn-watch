@@ -4,13 +4,23 @@ import { BRIEF_F1 } from "./mock/data";
 import { Sidebar } from "./components/Sidebar";
 import { Feed } from "./components/Feed";
 import { DigDeeperPanel } from "./components/DigDeeperPanel";
-import { listMonitors, listFeed, createMonitor, deleteMonitor, onFeedUpdated } from "./api";
+import {
+  listMonitors,
+  listFeed,
+  createMonitor,
+  deleteMonitor,
+  onFeedUpdated,
+  onTickStarted,
+  onTickFinished,
+} from "./api";
 
 function App() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
   const [digItem, setDigItem] = useState<FeedItem | null>(null);
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
 
   const refresh = async () => {
     setMonitors(await listMonitors());
@@ -19,9 +29,25 @@ function App() {
 
   useEffect(() => {
     refresh();
-    const un = onFeedUpdated(() => refresh());
+    const uFeed = onFeedUpdated(() => refresh());
+    const uStart = onTickStarted((id) =>
+      setCheckingIds((s) => new Set(s).add(id)),
+    );
+    const uFinish = onTickFinished(({ monitorId }) => {
+      setCheckingIds((s) => {
+        const n = new Set(s);
+        n.delete(monitorId);
+        return n;
+      });
+      // pull the freshly persisted stats for this tick
+      listMonitors().then(setMonitors);
+    });
+    const tick = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15000);
     return () => {
-      un.then((f) => f());
+      uFeed.then((f) => f());
+      uStart.then((f) => f());
+      uFinish.then((f) => f());
+      clearInterval(tick);
     };
   }, []);
 
@@ -54,6 +80,8 @@ function App() {
         onSelect={setSelectedMonitorId}
         onCreate={handleCreate}
         onDelete={handleDelete}
+        now={now}
+        checkingIds={checkingIds}
       />
 
       <Feed
