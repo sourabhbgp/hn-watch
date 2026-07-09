@@ -17,11 +17,13 @@ pub const BATCH_SIZE: usize = 30;
 const CLOCK_SKEW_SECS: i64 = 3600;
 
 /// What one tick did: how many stories it scanned, how many new matches it inserted,
-/// and whether this tick actually invoked the agent (false = nothing unseen, judge skipped).
+/// whether this tick actually invoked the agent (false = nothing unseen, judge skipped),
+/// and the watermark to adopt for the next tick (`None` = unchanged).
 pub struct TickOutcome {
     pub checked: usize,
     pub new: usize,
     pub agent_ran: bool,
+    pub watermark: Option<i64>,
 }
 
 pub fn now_secs() -> i64 {
@@ -141,7 +143,13 @@ pub async fn run_tick(
     };
     let unseen = select_unseen(recent, &seen);
     if unseen.is_empty() {
-        return Ok(TickOutcome { checked, new: 0, agent_ran: false });
+        // No new stories this tick, but still carry the watermark forward so `since`
+        // advances next tick. advance_watermark is monotonic, so this never regresses.
+        if let Some(wm) = new_watermark {
+            let conn = db.lock().map_err(|_| TickError::Db("db poisoned".into()))?;
+            db::set_watermark(&conn, &monitor.id, wm).map_err(|e| TickError::Db(e.to_string()))?;
+        }
+        return Ok(TickOutcome { checked, new: 0, agent_ran: false, watermark: new_watermark });
     }
 
     // Judge in chunks; fail-closed — the first batch error aborts before any DB write.
@@ -165,7 +173,7 @@ pub async fn run_tick(
     if let Some(wm) = new_watermark {
         db::set_watermark(&conn, &monitor.id, wm).map_err(|e| TickError::Db(e.to_string()))?;
     }
-    Ok(TickOutcome { checked, new: rows.len(), agent_ran: true })
+    Ok(TickOutcome { checked, new: rows.len(), agent_ran: true, watermark: new_watermark })
 }
 
 #[cfg(test)]

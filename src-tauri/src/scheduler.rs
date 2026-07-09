@@ -53,10 +53,16 @@ impl Scheduler {
         let interval = Duration::from_secs(monitor.interval_secs.max(1) as u64);
         let id = monitor.id.clone();
         let handle = tauri::async_runtime::spawn(async move {
+            let mut monitor = monitor;
             loop {
                 let _ = app.emit("tick-started", TickStarted { monitor_id: monitor.id.clone() });
 
                 let result = tick::run_tick(&db, &monitor).await;
+                if let Ok(o) = &result {
+                    if let Some(wm) = o.watermark {
+                        monitor.watermark = Some(wm);
+                    }
+                }
                 let now = tick::now_secs();
                 let (checked, new, error, code, agent_ran) = match &result {
                     Ok(o) => (o.checked as i64, o.new as i64, None, None, o.agent_ran),

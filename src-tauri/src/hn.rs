@@ -126,11 +126,12 @@ mod tests {
         let body = r#"{
           "hits": [
             {"objectID":"1","title":"A tool","url":"https://www.example.dev/a","points":10,"num_comments":3,"created_at_i":1700000000},
-            {"objectID":"2","title":"Ask HN: something","points":5}
+            {"objectID":"2","title":"Ask HN: something","points":5},
+            {"objectID":"3","points":1}
           ]
         }"#;
         let items = parse_algolia(body);
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 2); // item 3 dropped: no title
         assert_eq!(items[0].hn_id, "1");
         assert_eq!(items[0].domain, "example.dev"); // www. stripped
         assert_eq!(items[0].created_at, 1_700_000_000); // parsed from created_at_i
