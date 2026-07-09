@@ -38,6 +38,30 @@ buttons are no-ops, data is hard-coded, nothing calls Rust or Claude, no persist
       session context); removed `DECISIONS.md`
 - [x] Verified live in the native window; merged `feat/brand-icon` → `main`, pushed to origin
 
+## Session 3 — Monitors CRUD + persistence + the real tick loop (Phase 2)
+
+**Done** — the app now has a working core loop behind the UI (no more mock):
+
+- [x] SQLite store in the Rust core (`db.rs`, `rusqlite` bundled): `monitors`, `feed_items`,
+      and a `seen` table for dedup. FK cascade so deleting a monitor drops its feed + seen rows.
+- [x] Recent HN pulled from the Algolia HN Search API (`hn.rs`).
+- [x] `claude -p` agent runtime (`agent.rs`): one call per tick, strict JSON verdict parsing,
+      bounded by a shared semaphore so monitor ticks and the future swarm share one runtime.
+      Resolves the `claude` binary via PATH + common install dirs (works when launched from Finder).
+- [x] Per-tick logic (`tick.rs`) + per-monitor background workers (`scheduler.rs`): each monitor
+      ticks immediately on create/startup, then every interval. Dedup against `seen`; matches
+      appended to the one feed; `feed-updated` event → UI refresh. A failed tick is logged and skipped.
+- [x] Tauri commands (`commands.rs`): `create_monitor` / `list_monitors` / `delete_monitor` /
+      `list_feed`; DTOs serialize to the exact `src/types.ts` shapes. Workers respawn on startup.
+- [x] Frontend wired to live data (`api.ts`, `App.tsx`, `Sidebar.tsx`): inline create form
+      (name + prompt + interval), per-row delete, event-driven feed refresh. Reuses design tokens.
+- [x] **Verified live in the native window**: create → immediate tick → real HN matches with
+      `claude` summaries/reasons; restart → monitors + feed persist; dedup holds (no duplicate
+      cards); delete cascades the feed away. Built via `tauri build` and driven with computer-use.
+
+**Not yet (next phases)** — system tray + native notifications; the dig-deeper research swarm
+(still mock in the UI). Deliberately not built: monitor edit/pause/status, "Run now", search/filters.
+
 ## How to run
 
 ```bash
@@ -51,20 +75,16 @@ Requires Node 20+, Rust stable, and `claude` on the PATH (used from Phase 3 onwa
 [`docs/TESTING.md`](docs/TESTING.md) for the verified computer-use test loop (launch → screenshot →
 drive). Verified working end-to-end in Session 1.
 
-## Next — Monitors CRUD + persistence (Phase 2)
+## Next — Tray + native notifications (Phase 3)
 
-- [ ] Define shared types + Tauri command surface (`create_monitor`, `list_monitors`, …)
-- [ ] SQLite store in the Rust core; monitors survive restart
-- [ ] Wire the sidebar create/edit/delete to real Rust commands
-- [ ] Replace mock monitors with live data from the store
+- [ ] Keep running in the system tray with the window closed
+- [ ] Fire a native notification when new matches land (hook off the existing `feed-updated` path)
 
 ## Backlog (later phases)
 
-- [ ] HN ingestion + pre-filter
-- [ ] Agent runtime (bounded pool over `claude -p`) + one real monitor tick
-- [ ] Background workers, dedup, tray, native notifications
-- [ ] Dig-deeper swarm: parallel `claude -p`, live streaming → compiled brief
-- [ ] Error handling, polish, design write-up in README
+- [ ] Dig-deeper swarm: Rust orchestrator spins up several parallel `claude -p` agents,
+      live streaming → one compiled brief (currently mock in the UI, reusing the shared `agent` runtime)
+- [ ] Polish + design write-up / trade-offs in README
 
 ---
 

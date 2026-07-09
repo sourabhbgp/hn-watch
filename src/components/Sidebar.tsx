@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Monitor, MonitorStatus } from "../types";
 
 const STATUS_DOT: Record<MonitorStatus, string> = {
@@ -6,49 +7,51 @@ const STATUS_DOT: Record<MonitorStatus, string> = {
   error: "bg-rust",
 };
 
-const STATUS_LABEL: Record<MonitorStatus, string> = {
-  active: "active",
-  paused: "paused",
-  error: "error",
-};
+const INTERVAL_OPTIONS: { label: string; secs: number }[] = [
+  { label: "every 15m", secs: 900 },
+  { label: "every 30m", secs: 1800 },
+  { label: "every 1h", secs: 3600 },
+  { label: "every 6h", secs: 21600 },
+];
 
 function MonitorRow({
   monitor,
   selected,
   onSelect,
+  onDelete,
 }: {
   monitor: Monitor;
   selected: boolean;
   onSelect: () => void;
+  onDelete: () => void;
 }) {
   return (
-    <button
-      onClick={onSelect}
-      className={`w-full text-left rounded-lg px-3 py-2.5 transition-colors border ${
-        selected
-          ? "bg-hn-soft border-hn-border"
-          : "bg-transparent border-transparent hover:bg-card"
+    <div
+      className={`group w-full rounded-lg px-3 py-2.5 transition-colors border ${
+        selected ? "bg-hn-soft border-hn-border" : "bg-transparent border-transparent hover:bg-card"
       }`}
     >
       <div className="flex items-center gap-2">
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[monitor.status]}`}
-          title={STATUS_LABEL[monitor.status]}
-        />
-        <span className="truncate text-[13.5px] font-semibold text-ink">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[monitor.status]}`} />
+        <button onClick={onSelect} className="truncate text-left text-[13.5px] font-semibold text-ink">
           {monitor.name}
-        </span>
+        </button>
         <span className="ml-auto shrink-0 rounded-full bg-paper px-1.5 py-0.5 font-mono text-[10px] text-faint">
           {monitor.matchCount}
         </span>
+        <button
+          onClick={onDelete}
+          title="Delete monitor"
+          className="shrink-0 text-faint opacity-0 transition-opacity hover:text-rust group-hover:opacity-100"
+        >
+          ×
+        </button>
       </div>
-      <p className="mt-1 line-clamp-2 pl-4 text-[11.5px] leading-snug text-faint">
-        {monitor.prompt}
-      </p>
-      <p className="mt-1 pl-4 font-mono text-[10.5px] text-faint">
-        {monitor.intervalLabel}
-      </p>
-    </button>
+      <button onClick={onSelect} className="block w-full text-left">
+        <p className="mt-1 line-clamp-2 pl-4 text-[11.5px] leading-snug text-faint">{monitor.prompt}</p>
+        <p className="mt-1 pl-4 font-mono text-[10.5px] text-faint">{monitor.intervalLabel}</p>
+      </button>
+    </div>
   );
 }
 
@@ -56,16 +59,31 @@ export function Sidebar({
   monitors,
   selectedId,
   onSelect,
-  onNew,
+  onCreate,
+  onDelete,
 }: {
   monitors: Monitor[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  onNew: () => void;
+  onCreate: (name: string, prompt: string, intervalSecs: number) => void;
+  onDelete: (id: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [secs, setSecs] = useState(1800);
+
+  const submit = () => {
+    if (!name.trim() || !prompt.trim()) return;
+    onCreate(name.trim(), prompt.trim(), secs);
+    setName("");
+    setPrompt("");
+    setSecs(1800);
+    setOpen(false);
+  };
+
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-line bg-card/40">
-      {/* brand */}
       <div className="flex items-center gap-2.5 px-4 py-4">
         <div className="h-8 w-8 shrink-0 rounded-lg bg-hn grid place-items-center">
           <svg viewBox="216 216 592 592" className="h-6 w-6" aria-hidden="true">
@@ -80,24 +98,16 @@ export function Sidebar({
           </svg>
         </div>
         <div>
-          <div className="text-[15px] font-bold leading-none tracking-tight">
-            HN Watch
-          </div>
-          <div className="mt-1 font-mono text-[10px] text-faint">
-            watching Hacker News
-          </div>
+          <div className="text-[15px] font-bold leading-none tracking-tight">HN Watch</div>
+          <div className="mt-1 font-mono text-[10px] text-faint">watching Hacker News</div>
         </div>
       </div>
 
-      {/* monitors list */}
       <div className="flex items-center justify-between px-4 pb-2 pt-1">
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
-          Monitors
-        </span>
-        <span className="font-mono text-[10px] text-faint">
-          {monitors.length}
-        </span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Monitors</span>
+        <span className="font-mono text-[10px] text-faint">{monitors.length}</span>
       </div>
+
       <div className="flex-1 space-y-1 overflow-y-auto px-2">
         <button
           onClick={() => onSelect(null)}
@@ -115,18 +125,62 @@ export function Sidebar({
             monitor={m}
             selected={selectedId === m.id}
             onSelect={() => onSelect(m.id)}
+            onDelete={() => onDelete(m.id)}
           />
         ))}
       </div>
 
-      {/* new monitor */}
       <div className="border-t border-line p-3">
-        <button
-          onClick={onNew}
-          className="w-full rounded-lg bg-hn px-3 py-2 text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
-        >
-          + New monitor
-        </button>
+        {open ? (
+          <div className="space-y-2">
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Monitor name"
+              className="w-full rounded-md border border-line bg-paper px-2 py-1.5 text-[12.5px] text-ink placeholder:text-faint"
+            />
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="What do you care about? (natural language)"
+              rows={3}
+              className="w-full resize-none rounded-md border border-line bg-paper px-2 py-1.5 text-[12.5px] text-ink placeholder:text-faint"
+            />
+            <select
+              value={secs}
+              onChange={(e) => setSecs(Number(e.target.value))}
+              className="w-full rounded-md border border-line bg-paper px-2 py-1.5 text-[12.5px] text-ink"
+            >
+              {INTERVAL_OPTIONS.map((o) => (
+                <option key={o.secs} value={o.secs}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <div className="flex gap-2">
+              <button
+                onClick={submit}
+                className="flex-1 rounded-lg bg-hn px-3 py-2 text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
+              >
+                Create
+              </button>
+              <button
+                onClick={() => setOpen(false)}
+                className="rounded-lg border border-line px-3 py-2 text-[13px] font-semibold text-soft hover:bg-card"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setOpen(true)}
+            className="w-full rounded-lg bg-hn px-3 py-2 text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
+          >
+            + New monitor
+          </button>
+        )}
       </div>
     </aside>
   );
