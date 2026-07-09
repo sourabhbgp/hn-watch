@@ -134,7 +134,48 @@ pub fn parse_verdict(text: &str) -> Vec<Verdict> {
     serde_json::from_str::<Vec<Verdict>>(&text[start..=end]).unwrap_or_default()
 }
 
-pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, String> {
+/// A classified failure of a single `claude` call. `code()` is stable and drives
+/// paused-vs-error + global health; `message()` is the friendly UI copy.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentError {
+    NotFound,
+    NotAuthenticated,
+    Timeout,
+    Failed(String),
+}
+
+impl AgentError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            AgentError::NotFound => "claude_missing",
+            AgentError::NotAuthenticated => "claude_auth",
+            AgentError::Timeout => "claude_timeout",
+            AgentError::Failed(_) => "claude_error",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            AgentError::NotFound => "Claude Code was not found on this machine".into(),
+            AgentError::NotAuthenticated => "Claude Code isn't logged in".into(),
+            AgentError::Timeout => "Claude timed out".into(),
+            AgentError::Failed(s) => format!("Claude failed: {s}"),
+        }
+    }
+}
+
+/// Best-effort: does claude's stderr indicate a login / auth problem?
+fn is_auth_failure(stderr: &str) -> bool {
+    let s = stderr.to_lowercase();
+    s.contains("not logged in")
+        || s.contains("/login")
+        || s.contains("please run")
+        || s.contains("authenticate")
+        || s.contains("invalid api key")
+        || s.contains("unauthorized")
+}
+
+pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, AgentError> {
     if items.is_empty() {
         return Ok(Vec::new());
     }
@@ -142,20 +183,27 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
     let _permit = agent_sem()
         .acquire()
         .await
-        .map_err(|e| format!("semaphore closed: {e}"))?;
+        .map_err(|e| AgentError::Failed(format!("semaphore closed: {e}")))?;
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(90),
         claude_command().arg("-p").arg("--safe-mode").arg(&prompt).output(),
     )
     .await
-    .map_err(|_| "claude timed out after 90s".to_string())?
-    .map_err(|e| format!("failed to spawn claude: {e}"))?;
+    .map_err(|_| AgentError::Timeout)?
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AgentError::NotFound
+        } else {
+            AgentError::Failed(format!("failed to spawn claude: {e}"))
+        }
+    })?;
     if !output.status.success() {
-        return Err(format!(
-            "claude exited with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(if is_auth_failure(&stderr) {
+            AgentError::NotAuthenticated
+        } else {
+            AgentError::Failed(format!("claude exited with status {}: {stderr}", output.status))
+        });
     }
     let text = String::from_utf8_lossy(&output.stdout);
     Ok(parse_verdict(&text))
@@ -191,6 +239,24 @@ mod tests {
         let p = build_prompt("rust async", &items);
         assert!(p.contains("rust async"));
         assert!(p.contains("\"42\""));
+    }
+
+    #[test]
+    fn auth_failure_stderr_detected() {
+        assert!(is_auth_failure("Not logged in · Please run /login"));
+        assert!(is_auth_failure("Invalid API key"));
+        assert!(is_auth_failure("Unauthorized"));
+        assert!(!is_auth_failure("network error: connection timed out"));
+    }
+
+    #[test]
+    fn agent_error_codes_and_messages() {
+        assert_eq!(AgentError::NotFound.code(), "claude_missing");
+        assert_eq!(AgentError::NotAuthenticated.code(), "claude_auth");
+        assert_eq!(AgentError::Timeout.code(), "claude_timeout");
+        assert_eq!(AgentError::Failed("x".into()).code(), "claude_error");
+        assert!(AgentError::Timeout.message().contains("timed out"));
+        assert!(AgentError::NotAuthenticated.message().contains("logged in"));
     }
 
     #[test]
