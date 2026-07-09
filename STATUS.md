@@ -88,17 +88,28 @@ preflight; sleep/wake catch-up scheduling (wall-clock, not monotonic).
 - [x] **DTO exposes** `lastCheckedAt` / `nextCheckAt` (= `last_checked_at + interval`) / counts /
       `lastError` as raw epoch seconds + numbers; the client formats time and the countdown. `status`
       derives `"error"` when the last tick failed, else `"active"`.
-- [x] **UI:** sidebar rows show a live **`next in Xm`** countdown (client-side 15s `now` ticker), a
-      transient **`Checking…`** chip (driven by the tick events), an **`error`** chip (tooltip = reason),
-      and a **`Last checked H:MM · scanned · new`** status line. The feed empty-state now reflects the
-      last check — `Checked N stories, nothing matched yet` / `Last check failed…` / `Checking…` instead
-      of a blank pane. Reuses existing design tokens only.
+- [x] **UI — monitor tiles (redesigned for calm hierarchy):** each monitor is a contained tile
+      (`border-line` card, `hn-soft` when selected) on a widened 288px sidebar. It shows: the name, a
+      quiet **`next in Xm`** countdown pill (client-side 15s `now` ticker) that goes live as a
+      **`Checking…`** pill (pulse) during a tick and **`error`** when the last tick failed (tooltip =
+      reason), the prompt, and one calm meta line — **`N matches · N new · checked H:MM`**. `· N new`
+      appears only when a tick actually brought new matches, in brand orange (`text-hn`) so fresh
+      arrivals catch the eye; the per-tick *scanned* count moved to the meta line's hover tooltip.
+      Times render in the **viewer's local timezone** (`toLocaleTimeString`, no fixed zone). The feed
+      empty-state now reflects the last check — `Checked N stories, nothing matched yet` /
+      `Last check failed…` / `Checking…` instead of a blank pane. All colors are existing design tokens.
 - [x] Built via subagent-driven development (brainstorm → spec → plan → per-unit implement+review →
-      whole-branch review). Spec: `docs/superpowers/specs/2026-07-09-tick-observability-design.md`;
-      plan: `docs/superpowers/plans/2026-07-09-tick-observability.md`.
-- [x] Verified: `cargo test` 19/19, `tsc`/`vite build` clean; live in the native window (create →
-      `Checking…` → status line + countdown populate; restart → last-checked stats persist).
-- [x] Merged `feat/tick-observability` → `main` (`--no-ff`), pushed; branch kept on origin.
+      whole-branch review), then a design pass with the frontend-design skill on the row layout. Spec:
+      `docs/superpowers/specs/2026-07-09-tick-observability-design.md` (records the original single
+      status-line design; the sidebar was later redesigned into the tiles described above); plan:
+      `docs/superpowers/plans/2026-07-09-tick-observability.md`.
+- [x] Verified: `cargo test` 19/19, `tsc`/`vite build` clean; verified live in the native window across
+      states (fresh migration kept the existing monitor + matches; countdown ticks down; a real tick
+      showed `N new` in orange; check-with-0-matches → "Checked N stories, nothing matched yet"; restart
+      persists stats). A truncated status line found during review was the reason for the tile redesign.
+- [x] Merged `feat/tick-observability` → `main` (`--no-ff`, merge `acb8f04`), pushed; branch kept on
+      origin with full step-by-step history. (Note: an earlier premature merge was cleanly reverted —
+      `main` was reset to its pre-feature state and re-merged only after review sign-off.)
 
 **Known limitation (owned by TODO #4):** the scheduler still sleeps on a **monotonic** timer, so after a
 laptop sleep the wall-clock countdown and the real next tick can drift. This feature only exposes the
