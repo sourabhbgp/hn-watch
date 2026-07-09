@@ -2,6 +2,7 @@ import type { FeedItem, Monitor } from "../types";
 import { FeedCard } from "./FeedCard";
 
 function emptyMessage(m: Monitor | null): string {
+  if (m && m.lastError) return "Last check failed — see the monitor’s status.";
   if (m && m.lastCheckedAt != null) {
     return `Checked ${m.lastCheckedCount ?? 0} stories, nothing matched yet.`;
   }

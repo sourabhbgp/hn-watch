@@ -51,8 +51,15 @@ impl Scheduler {
                     }
                 };
 
-                if let Ok(conn) = db.lock() {
-                    let _ = db::record_tick(&conn, &monitor.id, checked, new, error.as_deref(), now);
+                match db.lock() {
+                    Ok(conn) => {
+                        if let Err(e) =
+                            db::record_tick(&conn, &monitor.id, checked, new, error.as_deref(), now)
+                        {
+                            eprintln!("[hn-watch] record_tick failed for {}: {e}", monitor.id);
+                        }
+                    }
+                    Err(_) => eprintln!("[hn-watch] db poisoned; skipped record_tick for {}", monitor.id),
                 }
 
                 if new > 0 {
