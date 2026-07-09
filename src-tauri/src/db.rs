@@ -12,6 +12,7 @@ pub struct Monitor {
     pub last_checked_count: Option<i64>,
     pub last_new_count: Option<i64>,
     pub last_error: Option<String>,
+    pub watermark: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +79,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     ensure_column(conn, "monitors", "last_checked_count", "INTEGER")?;
     ensure_column(conn, "monitors", "last_new_count", "INTEGER")?;
     ensure_column(conn, "monitors", "last_error", "TEXT")?;
+    ensure_column(conn, "monitors", "watermark", "INTEGER")?;
     Ok(())
 }
 
@@ -93,7 +95,7 @@ pub fn insert_monitor(conn: &Connection, m: &Monitor) -> rusqlite::Result<()> {
 pub fn list_monitors(conn: &Connection) -> rusqlite::Result<Vec<Monitor>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, prompt, interval_secs, created_at,
-                last_checked_at, last_checked_count, last_new_count, last_error
+                last_checked_at, last_checked_count, last_new_count, last_error, watermark
          FROM monitors ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -107,6 +109,7 @@ pub fn list_monitors(conn: &Connection) -> rusqlite::Result<Vec<Monitor>> {
             last_checked_count: r.get(6)?,
             last_new_count: r.get(7)?,
             last_error: r.get(8)?,
+            watermark: r.get(9)?,
         })
     })?;
     rows.collect()
@@ -200,6 +203,15 @@ pub fn record_tick(
     Ok(())
 }
 
+/// Advance a monitor's ingestion watermark (newest submission time processed).
+pub fn set_watermark(conn: &Connection, monitor_id: &str, watermark: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE monitors SET watermark = ?2 WHERE id = ?1",
+        rusqlite::params![monitor_id, watermark],
+    )?;
+    Ok(())
+}
+
 /// Null out the persisted per-tick error on every monitor. Used when Claude health
 /// recovers via preflight / Re-check (which set health Ok without running a tick), so
 /// recovered monitors show `active` immediately instead of a stale `error` chip.
@@ -229,6 +241,7 @@ mod tests {
             last_checked_count: None,
             last_new_count: None,
             last_error: None,
+            watermark: None,
         }
     }
 
@@ -327,6 +340,16 @@ mod tests {
     }
 
     #[test]
+    fn set_watermark_round_trips() {
+        let c = mem();
+        insert_monitor(&c, &sample_monitor("m1")).unwrap();
+        // fresh monitor: NULL watermark
+        assert_eq!(list_monitors(&c).unwrap().pop().unwrap().watermark, None);
+        set_watermark(&c, "m1", 1_700_000_000).unwrap();
+        assert_eq!(list_monitors(&c).unwrap().pop().unwrap().watermark, Some(1_700_000_000));
+    }
+
+    #[test]
     fn migrate_is_idempotent() {
         let c = Connection::open_in_memory().unwrap();
         migrate(&c).unwrap();
@@ -351,6 +374,9 @@ mod tests {
         let m = list_monitors(&c).unwrap().pop().unwrap();
         assert_eq!(m.id, "m1");
         assert_eq!(m.last_checked_at, None);
+        assert_eq!(m.watermark, None); // new column added as NULL on upgrade
+        set_watermark(&c, "m1", 999).unwrap();
+        assert_eq!(list_monitors(&c).unwrap().pop().unwrap().watermark, Some(999));
         record_tick(&c, "m1", 5, 1, Some("boom"), 200).unwrap();
         let m = list_monitors(&c).unwrap().pop().unwrap();
         assert_eq!(m.last_error, Some("boom".into()));
