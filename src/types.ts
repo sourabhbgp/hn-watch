@@ -3,6 +3,11 @@
 
 export type MonitorStatus = "active" | "paused" | "error";
 
+export interface ClaudeHealth {
+  status: "ok" | "missing" | "notAuthenticated";
+  message: string;
+}
+
 export interface Monitor {
   id: string;
   name: string;
