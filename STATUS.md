@@ -58,6 +58,16 @@ buttons are no-ops, data is hard-coded, nothing calls Rust or Claude, no persist
 - [x] **Verified live in the native window**: create → immediate tick → real HN matches with
       `claude` summaries/reasons; restart → monitors + feed persist; dedup holds (no duplicate
       cards); delete cascades the feed away. Built via `tauri build` and driven with computer-use.
+- [x] Fixes found during verification: resolve the `claude` binary path (Finder-launched app has a
+      minimal PATH); timeout the HN fetch + `claude` call and make feed inserts idempotent
+      (`UNIQUE` + `INSERT OR IGNORE`); sandbox the judge call with `--safe-mode` + `PWD` override so
+      ticks never trigger a macOS file-access prompt or read user files.
+- [x] Merged `feat/monitors-and-tick` → `main` (`--no-ff`), pushed; branch kept on origin.
+
+**Deferred backlog captured in [`docs/TODO.md`](docs/TODO.md)** (pick one per future session):
+tick observability + live "next in Xm" countdown/status chips; lossless burst ingestion
+(watermark + pagination + chunked `claude` calls); error handling + mandatory Claude Code startup
+preflight; sleep/wake catch-up scheduling (wall-clock, not monotonic).
 
 **Not yet (next phases)** — system tray + native notifications; the dig-deeper research swarm
 (still mock in the UI). Deliberately not built: monitor edit/pause/status, "Run now", search/filters.
