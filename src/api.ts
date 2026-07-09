@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Monitor, FeedItem, ClaudeHealth, NotificationHealth } from "./types";
+import type { Monitor, FeedItem, ClaudeHealth } from "./types";
 
 export const listMonitors = () => invoke<Monitor[]>("list_monitors");
 export const listFeed = () => invoke<FeedItem[]>("list_feed");
@@ -37,8 +37,3 @@ export const recheckClaude = () => invoke<ClaudeHealth>("recheck_claude");
 // Fires when Claude health changes (preflight, recheck, or a tick flip).
 export const onClaudeHealth = (cb: (h: ClaudeHealth) => void) =>
   listen<ClaudeHealth>("claude-health", (e) => cb(e.payload));
-
-// Live OS notification permission (drives the notification banner). Re-invoked
-// on window focus so re-enabling in System Settings clears the banner.
-export const getNotificationHealth = () =>
-  invoke<NotificationHealth>("notification_health");

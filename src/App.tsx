@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ClaudeHealth, FeedItem, Monitor, NotificationHealth } from "./types";
+import type { ClaudeHealth, FeedItem, Monitor } from "./types";
 import { BRIEF_F1 } from "./mock/data";
 import { Sidebar } from "./components/Sidebar";
 import { Feed } from "./components/Feed";
 import { DigDeeperPanel } from "./components/DigDeeperPanel";
 import { ClaudeBanner } from "./components/ClaudeBanner";
-import { NotificationBanner } from "./components/NotificationBanner";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   listMonitors,
   listFeed,
@@ -18,7 +16,6 @@ import {
   getClaudeHealth,
   recheckClaude,
   onClaudeHealth,
-  getNotificationHealth,
 } from "./api";
 
 function App() {
@@ -30,10 +27,6 @@ function App() {
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
   const [health, setHealth] = useState<ClaudeHealth>({ status: "ok", message: "" });
   const [rechecking, setRechecking] = useState(false);
-  const [notifHealth, setNotifHealth] = useState<NotificationHealth>({
-    status: "granted",
-    message: "",
-  });
 
   const refresh = async () => {
     setMonitors(await listMonitors());
@@ -60,18 +53,12 @@ function App() {
       setHealth(h);
       listMonitors().then(setMonitors);
     });
-    const refetchNotif = () => getNotificationHealth().then(setNotifHealth);
-    refetchNotif();
-    const uFocus = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-      if (focused) refetchNotif();
-    });
     const tick = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15000);
     return () => {
       uFeed.then((f) => f());
       uStart.then((f) => f());
       uFinish.then((f) => f());
       uHealth.then((f) => f());
-      uFocus.then((f) => f());
       clearInterval(tick);
     };
   }, []);
@@ -110,7 +97,6 @@ function App() {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <ClaudeBanner health={health} onRecheck={handleRecheck} rechecking={rechecking} />
-      <NotificationBanner health={notifHealth} />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar
           monitors={monitors}

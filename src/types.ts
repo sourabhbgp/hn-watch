@@ -8,11 +8,6 @@ export interface ClaudeHealth {
   message: string;
 }
 
-export interface NotificationHealth {
-  status: "granted" | "denied" | "default";
-  message: string;
-}
-
 export interface Monitor {
   id: string;
   name: string;

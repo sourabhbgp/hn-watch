@@ -43,37 +43,6 @@ impl ClaudeHealthDto {
     }
 }
 
-use tauri_plugin_notification::{NotificationExt, PermissionState};
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NotificationHealthDto {
-    pub status: String,
-    pub message: String,
-}
-
-/// Pure map from the OS permission state to the UI DTO. Only `Denied` shows a
-/// banner; `Granted` and every not-yet-decided/unknown state (incl. an OS read
-/// error → `None`) are silent. Mirrors the `ClaudeHealth::code()/message()` seam.
-pub fn notification_health_dto(state: Option<PermissionState>) -> NotificationHealthDto {
-    match state {
-        Some(PermissionState::Granted) => {
-            NotificationHealthDto { status: "granted".into(), message: String::new() }
-        }
-        Some(PermissionState::Denied) => NotificationHealthDto {
-            status: "denied".into(),
-            message: "Notifications are off — enable them in System Settings › Notifications › hn-watch to get alerts when new matches land.".into(),
-        },
-        _ => NotificationHealthDto { status: "default".into(), message: String::new() },
-    }
-}
-
-/// Read the live OS notification permission (synchronous, no cached state).
-#[tauri::command]
-pub fn notification_health(app: AppHandle) -> NotificationHealthDto {
-    notification_health_dto(app.notification().permission_state().ok())
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeedDto {
@@ -336,23 +305,5 @@ mod tests {
         // Claude ok, error set → error
         m.last_error = Some("Claude timed out".into());
         assert_eq!(to_monitor_dto(&c, &m, true).unwrap().status, "error");
-    }
-
-    #[test]
-    fn notification_health_maps_states() {
-        use tauri_plugin_notification::PermissionState;
-        let granted = notification_health_dto(Some(PermissionState::Granted));
-        assert_eq!(granted.status, "granted");
-        assert_eq!(granted.message, "");
-
-        let denied = notification_health_dto(Some(PermissionState::Denied));
-        assert_eq!(denied.status, "denied");
-        assert!(denied.message.contains("System Settings"));
-        assert!(denied.message.contains("hn-watch"));
-
-        // Err from the OS / any not-yet-decided state is silent (no banner).
-        let unknown = notification_health_dto(None);
-        assert_eq!(unknown.status, "default");
-        assert_eq!(unknown.message, "");
     }
 }
