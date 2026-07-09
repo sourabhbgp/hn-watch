@@ -21,6 +21,11 @@ pub struct MonitorDto {
     pub interval_label: String,
     pub status: String,
     pub match_count: i64,
+    pub last_checked_at: Option<i64>,
+    pub next_check_at: Option<i64>,
+    pub last_checked_count: Option<i64>,
+    pub last_new_count: Option<i64>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -37,6 +42,10 @@ pub struct FeedDto {
     pub hn_score: i64,
     pub hn_comments: i64,
     pub time_ago: String,
+}
+
+fn next_check_at(last_checked_at: Option<i64>, interval_secs: i64) -> Option<i64> {
+    last_checked_at.map(|t| t + interval_secs)
 }
 
 fn interval_label(secs: i64) -> String {
@@ -64,8 +73,13 @@ fn to_monitor_dto(conn: &Connection, m: &Monitor) -> rusqlite::Result<MonitorDto
         name: m.name.clone(),
         prompt: m.prompt.clone(),
         interval_label: interval_label(m.interval_secs),
-        status: "active".into(),
+        status: if m.last_error.is_some() { "error" } else { "active" }.into(),
         match_count: db::count_matches(conn, &m.id)?,
+        last_checked_at: m.last_checked_at,
+        next_check_at: next_check_at(m.last_checked_at, m.interval_secs),
+        last_checked_count: m.last_checked_count,
+        last_new_count: m.last_new_count,
+        last_error: m.last_error.clone(),
     })
 }
 
@@ -116,6 +130,10 @@ pub fn create_monitor(
         prompt: prompt.trim().to_string(),
         interval_secs: interval_secs.max(60),
         created_at: now_secs(),
+        last_checked_at: None,
+        last_checked_count: None,
+        last_new_count: None,
+        last_error: None,
     };
     if monitor.name.is_empty() || monitor.prompt.is_empty() {
         return Err("name and prompt are required".into());
@@ -179,5 +197,11 @@ mod tests {
         assert_eq!(time_ago(0, 7200), "2h");
         assert_eq!(time_ago(0, 172_800), "2d");
         assert_eq!(time_ago(100, 100), "1m"); // floor to at least 1m
+    }
+
+    #[test]
+    fn next_check_at_adds_interval_or_none() {
+        assert_eq!(next_check_at(Some(1000), 1800), Some(2800));
+        assert_eq!(next_check_at(None, 1800), None);
     }
 }
