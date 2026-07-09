@@ -228,6 +228,44 @@ catch-up rewrite and an "active-time" heartbeat were both considered and **rejec
       laptop sleep, is still catching up). Pure one-line frontend change in `Sidebar.tsx`
       (`fmtCountdown`); no backend, no new state, no new design tokens. `tsc` + `vite build` clean.
 
+## Session 8 — System tray + native notifications (Phase 3)
+
+**Done** — the watchtower now watches with the window closed and taps you on the shoulder when new
+matches land; it no longer only watches while you stare at it:
+
+- [x] **Close-to-tray** (`lib.rs` `WindowEvent::CloseRequested` → `api.prevent_close()` + `window.hide()`):
+      the red button / Cmd-W hides the window instead of quitting; monitor workers keep ticking, the Dock
+      icon stays (no activation-policy change). The only exit path is the tray Quit item.
+- [x] **Tray (menu-bar) icon** — new `src-tauri/src/tray.rs` (`tray-icon` feature on `tauri`): builds a
+      status item using the app icon with a two-item menu, **Show HN Watch** / **Quit HN Watch**. Show (and
+      a left-click on the icon) `show()`+`unminimize()`+`set_focus()` the window; Quit is `app.exit(0)`.
+- [x] **Native notifications** (`tauri-plugin-notification`, fired from Rust in `scheduler.rs` at the
+      existing `new > 0` site): **one notification per monitor** that landed matches, title
+      `"{name} · {N} new match(es)"` (U+00B7 `·`), body = the top matched story's title (`+N more` when the
+      tick brought several), falling back to the monitor prompt. Pure `format_notification` is unit-tested
+      (singular/plural/fallback). Additive `TickOutcome.newest_title` carries the title; the storm-coalesce
+      guarantee (1 notif/monitor/tick) is preserved. Startup requests notification permission once in `setup`.
+- [x] Built via subagent-driven development: spec
+      (`docs/superpowers/specs/2026-07-09-tray-and-notifications-design.md`) → plan
+      (`docs/superpowers/plans/2026-07-09-tray-and-notifications.md`) → 2 implementer units (tray, then
+      notifications) each task-reviewed clean → whole-branch review (opus; no code defects, only two
+      verification gaps to close live).
+- [x] **Verified:** `cargo test` 37/37, `cargo build` zero warnings. **Live-verified in the native release
+      app** (computer-use + AppleScript/System Events): close→hide keeps the process alive; tray menu copy
+      exact; **Show** restores the hidden window; **Quit** exits the process cleanly; first-launch window
+      opens without the permission prompt hanging it (whole-branch review's I2).
+- [x] **Notification delivery proven (whole-branch review's I1).** Permission is granted (System Settings →
+      Notifications → hn-watch: Allow ON, Desktop/Notification Centre/Lock Screen checked, Alert Style
+      Temporary). A real-screen `screencapture -x` showed a live hn-watch banner (app badge, Apple-
+      Intelligence-summarised body). **Gotcha for future sessions:** computer-use screenshots apply native
+      app-filtering that **blacks out the NotificationCenter banner layer** — banners are invisible in those
+      captures even though they fire; use `screencapture -x` (real pixels) to see them. The off-main-thread
+      `.show()` (I1's concern) is **not** a bug — `UNUserNotificationCenter.add` is thread-safe; no code fix.
+- [x] Cleaned up 4 throwaway test monitors created during verification (DB backed up); the two real
+      monitors are untouched. Merged `feat/tray-notifications` → `main` (`--no-ff`), pushed; branch kept.
+
+**Not yet (last phase)** — the dig-deeper research swarm (still mock in the UI).
+
 ## How to run
 
 ```bash
@@ -241,15 +279,13 @@ Requires Node 20+, Rust stable, and `claude` on the PATH (used from Phase 3 onwa
 [`docs/TESTING.md`](docs/TESTING.md) for the verified computer-use test loop (launch → screenshot →
 drive). Verified working end-to-end in Session 1.
 
-## Next — Tray + native notifications (Phase 3)
+## Next — Dig-deeper research swarm (last phase)
 
-- [ ] Keep running in the system tray with the window closed
-- [ ] Fire a native notification when new matches land (hook off the existing `feed-updated` path)
+- [ ] Rust orchestrator spins up several parallel `claude -p` agents, live streaming → one compiled
+      brief (currently mock in the UI, reusing the shared `agent` runtime)
 
 ## Backlog (later phases)
 
-- [ ] Dig-deeper swarm: Rust orchestrator spins up several parallel `claude -p` agents,
-      live streaming → one compiled brief (currently mock in the UI, reusing the shared `agent` runtime)
 - [ ] Polish + design write-up / trade-offs in README
 
 ---

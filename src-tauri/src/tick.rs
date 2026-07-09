@@ -24,6 +24,9 @@ pub struct TickOutcome {
     pub new: usize,
     pub agent_ran: bool,
     pub watermark: Option<i64>,
+    /// Title of the top match this tick landed (first inserted feed row), for the
+    /// notification body. `None` when nothing new was inserted.
+    pub newest_title: Option<String>,
 }
 
 pub fn now_secs() -> i64 {
@@ -149,7 +152,7 @@ pub async fn run_tick(
             let conn = db.lock().map_err(|_| TickError::Db("db poisoned".into()))?;
             db::set_watermark(&conn, &monitor.id, wm).map_err(|e| TickError::Db(e.to_string()))?;
         }
-        return Ok(TickOutcome { checked, new: 0, agent_ran: false, watermark: new_watermark });
+        return Ok(TickOutcome { checked, new: 0, agent_ran: false, watermark: new_watermark, newest_title: None });
     }
 
     // Judge in chunks; fail-closed — the first batch error aborts before any DB write.
@@ -173,7 +176,13 @@ pub async fn run_tick(
     if let Some(wm) = new_watermark {
         db::set_watermark(&conn, &monitor.id, wm).map_err(|e| TickError::Db(e.to_string()))?;
     }
-    Ok(TickOutcome { checked, new: rows.len(), agent_ran: true, watermark: new_watermark })
+    Ok(TickOutcome {
+        checked,
+        new: rows.len(),
+        agent_ran: true,
+        watermark: new_watermark,
+        newest_title: rows.first().map(|r| r.title.clone()),
+    })
 }
 
 #[cfg(test)]

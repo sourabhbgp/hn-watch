@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
 
 use crate::db;
 
@@ -29,6 +30,38 @@ struct TickFinished {
     checked_count: i64,
     new_count: i64,
     error: Option<String>,
+}
+
+/// Build the notification (title, body) from a tick's new matches. Pure — unit-tested.
+/// Title: "{name} · N new match(es)". Body: the top match's title, plus " +N more"
+/// when more than one landed; falls back to the monitor prompt if no title is known.
+fn format_notification(
+    name: &str,
+    new: i64,
+    newest_title: Option<&str>,
+    prompt: &str,
+) -> (String, String) {
+    let noun = if new == 1 { "match" } else { "matches" };
+    let title = format!("{name} · {new} new {noun}");
+    let body = match newest_title {
+        Some(t) if new > 1 => format!("{t} +{} more", new - 1),
+        Some(t) => t.to_string(),
+        None => prompt.to_string(),
+    };
+    (title, body)
+}
+
+/// Fire one native OS notification for a monitor's new matches. Best-effort:
+/// a failed `.show()` is ignored so notification trouble never affects the tick.
+fn notify_new_matches(
+    app: &AppHandle,
+    name: &str,
+    new: i64,
+    newest_title: Option<&str>,
+    prompt: &str,
+) {
+    let (title, body) = format_notification(name, new, newest_title, prompt);
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 pub struct Scheduler {
@@ -64,8 +97,8 @@ impl Scheduler {
                     }
                 }
                 let now = tick::now_secs();
-                let (checked, new, error, code, agent_ran) = match &result {
-                    Ok(o) => (o.checked as i64, o.new as i64, None, None, o.agent_ran),
+                let (checked, new, error, code, agent_ran, newest_title) = match &result {
+                    Ok(o) => (o.checked as i64, o.new as i64, None, None, o.agent_ran, o.newest_title.clone()),
                     Err(e) => {
                         eprintln!(
                             "[hn-watch] tick failed for {}: {} ({}) [{e:?}]",
@@ -73,7 +106,7 @@ impl Scheduler {
                             e.message(),
                             e.code()
                         );
-                        (0i64, 0i64, Some(e.message()), Some(e.code()), false)
+                        (0i64, 0i64, Some(e.message()), Some(e.code()), false, None)
                     }
                 };
 
@@ -115,6 +148,7 @@ impl Scheduler {
 
                 if new > 0 {
                     let _ = app.emit("feed-updated", ());
+                    notify_new_matches(&app, &monitor.name, new, newest_title.as_deref(), &monitor.prompt);
                 }
                 let _ = app.emit(
                     "tick-finished",
@@ -143,5 +177,33 @@ impl Scheduler {
 impl Default for Scheduler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_notification;
+
+    #[test]
+    fn singular_title_and_title_body() {
+        let (title, body) =
+            format_notification("Rust async", 1, Some("Tokio 2.0 released"), "rust async runtimes");
+        assert_eq!(title, "Rust async · 1 new match");
+        assert_eq!(body, "Tokio 2.0 released");
+    }
+
+    #[test]
+    fn plural_title_and_more_suffix() {
+        let (title, body) =
+            format_notification("AI startups", 3, Some("OpenAI ships thing"), "ai startup launches");
+        assert_eq!(title, "AI startups · 3 new matches");
+        assert_eq!(body, "OpenAI ships thing +2 more");
+    }
+
+    #[test]
+    fn body_falls_back_to_prompt_when_no_title() {
+        let (title, body) = format_notification("Quiet", 1, None, "some prompt");
+        assert_eq!(title, "Quiet · 1 new match");
+        assert_eq!(body, "some prompt");
     }
 }
