@@ -14,14 +14,37 @@ const INTERVAL_OPTIONS: { label: string; secs: number }[] = [
   { label: "every 6h", secs: 21600 },
 ];
 
+function fmtClock(epoch: number): string {
+  return new Date(epoch * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function fmtCountdown(nextCheckAt: number | null, now: number): string {
+  if (nextCheckAt == null) return "scheduling…";
+  const rem = nextCheckAt - now;
+  if (rem <= 0) return "due now";
+  if (rem < 60) return "next in <1m";
+  return `next in ${Math.round(rem / 60)}m`;
+}
+
+function statusLine(m: Monitor, checking: boolean): string {
+  if (checking) return "Checking…";
+  if (m.lastError) return "Last tick failed";
+  if (m.lastCheckedAt == null) return "Never checked";
+  return `Last checked ${fmtClock(m.lastCheckedAt)} · ${m.lastCheckedCount ?? 0} · ${m.lastNewCount ?? 0} new`;
+}
+
 function MonitorRow({
   monitor,
   selected,
+  now,
+  checking,
   onSelect,
   onDelete,
 }: {
   monitor: Monitor;
   selected: boolean;
+  now: number;
+  checking: boolean;
   onSelect: () => void;
   onDelete: () => void;
 }) {
@@ -49,7 +72,26 @@ function MonitorRow({
       </div>
       <button onClick={onSelect} className="block w-full text-left">
         <p className="mt-1 line-clamp-2 pl-4 text-[11.5px] leading-snug text-faint">{monitor.prompt}</p>
-        <p className="mt-1 pl-4 font-mono text-[10.5px] text-faint">{monitor.intervalLabel}</p>
+        <div className="mt-1.5 flex items-center gap-2 pl-4">
+          {checking ? (
+            <span className="shrink-0 rounded-full bg-hn-soft px-1.5 py-0.5 font-mono text-[10px] text-rust">
+              <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-rust align-middle" />
+              Checking…
+            </span>
+          ) : monitor.status === "error" ? (
+            <span
+              title={monitor.lastError ?? ""}
+              className="shrink-0 rounded-full bg-paper px-1.5 py-0.5 font-mono text-[10px] text-rust"
+            >
+              error
+            </span>
+          ) : (
+            <span className="shrink-0 rounded-full bg-paper px-1.5 py-0.5 font-mono text-[10px] text-faint">
+              {fmtCountdown(monitor.nextCheckAt, now)}
+            </span>
+          )}
+          <span className="truncate font-mono text-[10.5px] text-faint">{statusLine(monitor, checking)}</span>
+        </div>
       </button>
     </div>
   );
@@ -61,12 +103,16 @@ export function Sidebar({
   onSelect,
   onCreate,
   onDelete,
+  now,
+  checkingIds,
 }: {
   monitors: Monitor[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   onCreate: (name: string, prompt: string, intervalSecs: number) => void;
   onDelete: (id: string) => void;
+  now: number;
+  checkingIds: Set<string>;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -124,6 +170,8 @@ export function Sidebar({
             key={m.id}
             monitor={m}
             selected={selectedId === m.id}
+            now={now}
+            checking={checkingIds.has(m.id)}
             onSelect={() => onSelect(m.id)}
             onDelete={() => onDelete(m.id)}
           />
