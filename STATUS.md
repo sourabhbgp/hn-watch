@@ -72,6 +72,38 @@ preflight; sleep/wake catch-up scheduling (wall-clock, not monotonic).
 **Not yet (next phases)** — system tray + native notifications; the dig-deeper research swarm
 (still mock in the UI). Deliberately not built: monitor edit/pause/status, "Run now", search/filters.
 
+## Session 4 — Tick observability (TODO #1)
+
+**Done** — a monitor is no longer a black box; from the UI alone you can tell what each one is doing:
+
+- [x] **Persisted per-tick results** on the `monitors` table (`last_checked_at`, `last_checked_count`,
+      `last_new_count`, `last_error`) via an **idempotent additive migration** (`ensure_column` checks
+      `PRAGMA table_info` before `ALTER TABLE` — safe to run every launch, upgrades existing on-disk DBs
+      without data loss). New `db::record_tick` writes all four in one `UPDATE`; `None` error clears a
+      prior error. Covered by tests (migration idempotency + pre-existing-DB upgrade + error round-trip).
+- [x] **Tick lifecycle events** from `scheduler.rs`: `tick-started {monitorId}` and
+      `tick-finished {monitorId, checkedCount, newCount, error?}` around each tick; `run_tick` returns a
+      `TickOutcome { checked, new }` (`checked` = stories *scanned* that tick, ~30, not just unseen).
+      `feed-updated` still fires only when new matches land.
+- [x] **DTO exposes** `lastCheckedAt` / `nextCheckAt` (= `last_checked_at + interval`) / counts /
+      `lastError` as raw epoch seconds + numbers; the client formats time and the countdown. `status`
+      derives `"error"` when the last tick failed, else `"active"`.
+- [x] **UI:** sidebar rows show a live **`next in Xm`** countdown (client-side 15s `now` ticker), a
+      transient **`Checking…`** chip (driven by the tick events), an **`error`** chip (tooltip = reason),
+      and a **`Last checked H:MM · scanned · new`** status line. The feed empty-state now reflects the
+      last check — `Checked N stories, nothing matched yet` / `Last check failed…` / `Checking…` instead
+      of a blank pane. Reuses existing design tokens only.
+- [x] Built via subagent-driven development (brainstorm → spec → plan → per-unit implement+review →
+      whole-branch review). Spec: `docs/superpowers/specs/2026-07-09-tick-observability-design.md`;
+      plan: `docs/superpowers/plans/2026-07-09-tick-observability.md`.
+- [x] Verified: `cargo test` 19/19, `tsc`/`vite build` clean; live in the native window (create →
+      `Checking…` → status line + countdown populate; restart → last-checked stats persist).
+- [x] Merged `feat/tick-observability` → `main` (`--no-ff`), pushed; branch kept on origin.
+
+**Known limitation (owned by TODO #4):** the scheduler still sleeps on a **monotonic** timer, so after a
+laptop sleep the wall-clock countdown and the real next tick can drift. This feature only exposes the
+honest `nextCheckAt`; making the schedule itself wall-clock/catch-up correct is TODO #4.
+
 ## How to run
 
 ```bash
