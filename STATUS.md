@@ -271,6 +271,40 @@ matches land; it no longer only watches while you stare at it:
 
 **Not yet (last phase)** — the dig-deeper research swarm (still mock in the UI).
 
+## Session 9 — Notification-denied banner (TODO #5) — ⛔ DESCOPED (plugin limitation)
+
+**Attempted, then descoped after live end-to-end testing proved it unbuildable on desktop.** The goal
+was TODO #5: when macOS notifications are off, show a banner (reusing the Session-5 Claude-health
+banner + Re-check pattern) with an "Open Settings" deep-link that self-clears on window focus.
+
+- [x] Full subagent-driven build, all reviews clean: spec + plan
+      (`docs/superpowers/specs/2026-07-09-notification-permission-banner-design.md`, `…/plans/…`); a
+      synchronous `notification_health` command + pure unit-tested `granted`/`denied`/`default`
+      mapping (Task 1); a DRY shared `Banner` + `NotificationBanner` + `App.tsx` focus-recheck wiring
+      (Task 2). A whole-branch review (opus) found **no code defects** — merge-ready *pending live E2E*.
+- [x] **Live E2E on the release build caught a false premise that static review could not.** With
+      macOS notifications toggled truly **off** (System Settings → Notifications → hn-watch → Allow
+      off), the banner **never appeared** — neither on focus-recheck nor on a cold relaunch.
+- [x] **Root cause (primary-source):** `tauri-plugin-notification` **2.3.3 (latest)** hardcodes the
+      desktop permission API — `desktop.rs` returns `Ok(PermissionState::Granted)` from **both**
+      `permission_state()` and `request_permission()`, never querying the OS. So `notification_health`
+      always read `granted`; the `denied` banner could never fire. Our mapping/banner/wiring were
+      correct — fed a constant. Cross-checked: official Tauri docs are **silent** on desktop
+      permission behavior (the reason it slipped design + code review); the popular fork
+      `Choochmeque/tauri-plugin-notifications` (v0.4.6) **stubs desktop identically**. No off-the-shelf
+      fix — detecting desktop notification-denied needs a native `UNUserNotificationCenter` query via
+      `objc2`, which the weekend brief allows leaving as stubbed incidental plumbing.
+- [x] **Decision:** descope + document; don't ship a banner that can never fire. **Reverted** the
+      feature (`13e59a1`; code recoverable in history — `7e9061a`/`6227ffc`/`8d8f2d5`). **Cleaned up**
+      the pre-existing **dead** startup `request_permission()` block in `lib.rs` (`72a5825`) — it was
+      inert on desktop (guard never true against the always-`Granted` stub; the call itself a no-op).
+      Notification **delivery is unchanged** and still works; macOS still prompts once on the first
+      delivered notification (via `notify_rust`) — only *denial detection* is unavailable.
+- [x] `cargo test` 37/37, `cargo build` 0 warnings, `npm run build` clean after the revert + cleanup.
+
+**Takeaway:** the live-in-the-real-app test rule earned its keep — three passing review gates validated
+correct code against a wrong assumption; only running it on the release build surfaced the truth.
+
 ## How to run
 
 ```bash

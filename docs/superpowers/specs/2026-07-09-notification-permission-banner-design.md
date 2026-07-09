@@ -1,6 +1,40 @@
 # Surface the notification-denied state — design
 
-**Ticket:** `docs/TODO.md` #5. **Date:** 2026-07-09. **Status:** approved, pre-implementation.
+**Ticket:** `docs/TODO.md` #5. **Date:** 2026-07-09. **Status:** ⛔ **DESCOPED** — not
+deliverable on desktop with the current stack (see Outcome). The design below is kept for a
+future native implementation.
+
+## Outcome (2026-07-09) — descoped after live E2E
+
+Built the backend command + banner + wiring (all reviewed clean), then verified on the **release
+build**: with macOS notifications truly **off**, the banner **never appeared** — cold or warm.
+
+**Root cause (primary-source confirmed):** `tauri-plugin-notification` **2.3.3 (the latest published
+version)** hardcodes the desktop permission API — `desktop.rs` returns `Ok(PermissionState::Granted)`
+from **both** `permission_state()` and `request_permission()`, never querying the OS. So
+`notification_health` always reads `granted` and the `denied` banner can never fire. This is not our
+code — the mapping/banner/wiring were correct; they were fed a constant. The official Tauri docs are
+**silent** on desktop permission behavior (neither confirm nor deny), which is why the false premise
+survived design + code review; only the live E2E caught it.
+
+**No off-the-shelf fix:** we are already on the latest official plugin, and the popular fork
+`Choochmeque/tauri-plugin-notifications` (v0.4.6) **stubs desktop the same way**. Detecting a
+notification-**denied** state on desktop macOS requires calling the native
+`UNUserNotificationCenter.getNotificationSettings` API directly via `objc2` bindings — the standard
+native-app pattern, but risky in an ad-hoc-signed build (the query subsystem may disagree with
+`notify_rust`'s delivery subsystem) and it is exactly the kind of incidental plumbing the weekend
+brief allows stubbing. **Decision:** descope; document; redirect effort to the dig-deeper swarm (a
+core, still-unbuilt requirement). The feature code remains recoverable in git history (commits
+`7e9061a`, `6227ffc`, `8d8f2d5`, reverted in `13e59a1`).
+
+**Note — first-time prompt still works:** the app still gets its one macOS permission prompt for
+free, triggered by the OS on the **first delivered notification** (via `notify_rust`), not by our
+code. The dead startup `request_permission()` guard was removed (`72a5825`). Only *denial detection*
+is missing.
+
+---
+
+_Original design (pre-implementation) follows._
 
 ## Problem
 
