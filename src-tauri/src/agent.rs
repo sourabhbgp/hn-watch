@@ -213,6 +213,24 @@ impl ClaudeHealth {
     }
 }
 
+/// Compute the next global health from a tick outcome. A tick that actually ran the
+/// agent and succeeded → Ok (self-heal). A successful *early return* that never called
+/// the agent → unchanged (it is not evidence Claude works). `claude_missing`/`claude_auth`
+/// errors set the corresponding down-state; any other error leaves health unchanged.
+pub fn next_claude_health(
+    current: &ClaudeHealth,
+    agent_ran: bool,
+    error_code: Option<&str>,
+) -> ClaudeHealth {
+    match error_code {
+        None if agent_ran => ClaudeHealth::Ok,
+        None => current.clone(),
+        Some("claude_missing") => ClaudeHealth::Missing,
+        Some("claude_auth") => ClaudeHealth::NotAuthenticated,
+        Some(_) => current.clone(),
+    }
+}
+
 /// Pure: map `claude auth status --json` output to a health state.
 /// non-zero exit → NotAuthenticated (logged-out exits 1); exit 0 with
 /// `{"loggedIn": false}` → NotAuthenticated; anything else on exit 0 → Ok
@@ -340,6 +358,24 @@ mod tests {
         assert_eq!(classify_auth(false, ""), ClaudeHealth::NotAuthenticated);
         // unparseable stdout on a zero exit must NOT false-alarm
         assert_eq!(classify_auth(true, "not json at all"), ClaudeHealth::Ok);
+    }
+
+    #[test]
+    fn next_claude_health_transitions() {
+        // real success clears a down-state
+        assert_eq!(next_claude_health(&ClaudeHealth::Missing, true, None), ClaudeHealth::Ok);
+        // early-return success must NOT clear a down-state (the live bug)
+        assert_eq!(next_claude_health(&ClaudeHealth::Missing, false, None), ClaudeHealth::Missing);
+        assert_eq!(
+            next_claude_health(&ClaudeHealth::NotAuthenticated, false, None),
+            ClaudeHealth::NotAuthenticated
+        );
+        // missing / auth errors set the down-state
+        assert_eq!(next_claude_health(&ClaudeHealth::Ok, true, Some("claude_missing")), ClaudeHealth::Missing);
+        assert_eq!(next_claude_health(&ClaudeHealth::Ok, true, Some("claude_auth")), ClaudeHealth::NotAuthenticated);
+        // transient errors leave health unchanged
+        assert_eq!(next_claude_health(&ClaudeHealth::Ok, true, Some("claude_timeout")), ClaudeHealth::Ok);
+        assert_eq!(next_claude_health(&ClaudeHealth::Missing, true, Some("hn_error")), ClaudeHealth::Missing);
     }
 
     #[test]

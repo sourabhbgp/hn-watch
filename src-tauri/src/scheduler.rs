@@ -58,16 +58,16 @@ impl Scheduler {
 
                 let result = tick::run_tick(&db, &monitor).await;
                 let now = tick::now_secs();
-                let (checked, new, error, code) = match &result {
-                    Ok(o) => (o.checked as i64, o.new as i64, None, None),
+                let (checked, new, error, code, agent_ran) = match &result {
+                    Ok(o) => (o.checked as i64, o.new as i64, None, None, o.agent_ran),
                     Err(e) => {
                         eprintln!(
-                            "[hn-watch] tick failed for {}: {} ({})",
+                            "[hn-watch] tick failed for {}: {} ({}) [{e:?}]",
                             monitor.id,
                             e.message(),
                             e.code()
                         );
-                        (0i64, 0i64, Some(e.message()), Some(e.code()))
+                        (0i64, 0i64, Some(e.message()), Some(e.code()), false)
                     }
                 };
 
@@ -90,14 +90,11 @@ impl Scheduler {
                 }
 
                 // Global Claude health: only claude_missing / claude_auth flip it;
-                // success clears it; a transient error leaves it unchanged.
+                // a tick that actually ran the agent and succeeded clears it; a
+                // transient error, or a successful early return that never ran the
+                // agent, leaves it unchanged.
                 if let Ok(mut h) = health.lock() {
-                    let next = match code {
-                        Some("claude_missing") => ClaudeHealth::Missing,
-                        Some("claude_auth") => ClaudeHealth::NotAuthenticated,
-                        None => ClaudeHealth::Ok,
-                        _ => h.clone(),
-                    };
+                    let next = crate::agent::next_claude_health(&*h, agent_ran, code);
                     if *h != next {
                         *h = next.clone();
                         let _ = app.emit(

@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-/// What one tick did: how many stories it scanned and how many new matches it inserted.
+/// What one tick did: how many stories it scanned, how many new matches it inserted,
+/// and whether this tick actually invoked the agent (false = nothing unseen, judge skipped).
 pub struct TickOutcome {
     pub checked: usize,
     pub new: usize,
+    pub agent_ran: bool,
 }
 
 pub fn now_secs() -> i64 {
@@ -98,7 +100,7 @@ pub async fn run_tick(
     };
     let unseen = select_unseen(recent, &seen);
     if unseen.is_empty() {
-        return Ok(TickOutcome { checked, new: 0 });
+        return Ok(TickOutcome { checked, new: 0, agent_ran: false });
     }
 
     let verdicts = agent::judge(&monitor.prompt, &unseen)
@@ -113,7 +115,7 @@ pub async fn run_tick(
     for item in &unseen {
         db::mark_seen(&conn, &monitor.id, &item.hn_id).map_err(|e| TickError::Db(e.to_string()))?;
     }
-    Ok(TickOutcome { checked, new: rows.len() })
+    Ok(TickOutcome { checked, new: rows.len(), agent_ran: true })
 }
 
 #[cfg(test)]
