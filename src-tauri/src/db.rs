@@ -200,6 +200,14 @@ pub fn record_tick(
     Ok(())
 }
 
+/// Null out the persisted per-tick error on every monitor. Used when Claude health
+/// recovers via preflight / Re-check (which set health Ok without running a tick), so
+/// recovered monitors show `active` immediately instead of a stale `error` chip.
+pub fn clear_all_errors(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("UPDATE monitors SET last_error = NULL", [])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +309,21 @@ mod tests {
         let m = list_monitors(&c).unwrap().pop().unwrap();
         assert_eq!(m.last_error, None);
         assert_eq!(m.last_new_count, Some(3));
+    }
+
+    #[test]
+    fn clear_all_errors_nulls_every_monitor() {
+        let c = mem();
+        insert_monitor(&c, &sample_monitor("m1")).unwrap();
+        let mut m2 = sample_monitor("m2");
+        m2.name = "AI2".into();
+        insert_monitor(&c, &m2).unwrap();
+        record_tick(&c, "m1", 5, 0, Some("Claude Code was not found on this machine"), 1).unwrap();
+        record_tick(&c, "m2", 5, 0, Some("Claude isn't logged in"), 1).unwrap();
+        clear_all_errors(&c).unwrap();
+        for m in list_monitors(&c).unwrap() {
+            assert_eq!(m.last_error, None);
+        }
     }
 
     #[test]

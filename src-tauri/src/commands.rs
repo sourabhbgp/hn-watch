@@ -195,19 +195,35 @@ pub fn claude_health(state: State<'_, AppState>) -> Result<ClaudeHealthDto, Stri
     Ok(ClaudeHealthDto::from_health(&h))
 }
 
+/// Apply a freshly-probed ClaudeHealth: store it, clear stale per-monitor errors when
+/// healthy (so recovered monitors show `active`, not a stale `error`), and notify the UI.
+/// Shared by the startup preflight and the Re-check command. Lock order health→db, and
+/// neither guard is held across the emit.
+fn apply_claude_health(
+    db: &Arc<Mutex<Connection>>,
+    health_state: &Arc<Mutex<ClaudeHealth>>,
+    app: &AppHandle,
+    new_health: ClaudeHealth,
+) {
+    if let Ok(mut h) = health_state.lock() {
+        *h = new_health.clone();
+    }
+    if new_health.is_ok() {
+        if let Ok(conn) = db.lock() {
+            let _ = db::clear_all_errors(&conn);
+        }
+    }
+    let _ = app.emit("claude-health", ClaudeHealthDto::from_health(&new_health));
+}
+
 #[tauri::command]
 pub async fn recheck_claude(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ClaudeHealthDto, String> {
-    let health = agent::preflight().await; // no MutexGuard held across await
-    {
-        let mut h = state.claude_health.lock().map_err(|_| "health poisoned".to_string())?;
-        *h = health.clone();
-    }
-    let dto = ClaudeHealthDto::from_health(&health);
-    let _ = app.emit("claude-health", dto.clone());
-    Ok(dto)
+    let health = agent::preflight().await; // no lock held across the await
+    apply_claude_health(&state.db, &state.claude_health, &app, health.clone());
+    Ok(ClaudeHealthDto::from_health(&health))
 }
 
 /// Called once at startup: open/create the DB, spawn a worker per monitor, and
@@ -232,13 +248,11 @@ pub fn init_state(app: &AppHandle) -> AppState {
     // Startup preflight, async so the window opens immediately.
     {
         let app = app.clone();
+        let db = Arc::clone(&db);
         let health = Arc::clone(&claude_health);
         tauri::async_runtime::spawn(async move {
             let result = agent::preflight().await;
-            if let Ok(mut h) = health.lock() {
-                *h = result.clone();
-            }
-            let _ = app.emit("claude-health", ClaudeHealthDto::from_health(&result));
+            apply_claude_health(&db, &health, &app, result);
         });
     }
 
