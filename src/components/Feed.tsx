@@ -1,6 +1,14 @@
 import type { FeedItem, Monitor } from "../types";
 import { FeedCard } from "./FeedCard";
 
+function emptyMessage(m: Monitor | null): string {
+  if (m && m.lastCheckedAt != null) {
+    return `Checked ${m.lastCheckedCount ?? 0} stories, nothing matched yet.`;
+  }
+  if (m) return "Checking…";
+  return "No matches yet.";
+}
+
 export function Feed({
   items,
   monitors,
@@ -34,7 +42,7 @@ export function Feed({
         <div className="mx-auto flex max-w-2xl flex-col gap-3 px-6 py-5">
           {items.length === 0 ? (
             <div className="mt-20 text-center text-[13px] text-faint">
-              No matches yet for this monitor.
+              {emptyMessage(activeMonitor)}
             </div>
           ) : (
             items.map((item) => (
