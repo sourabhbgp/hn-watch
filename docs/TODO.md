@@ -182,7 +182,25 @@ and (with #2) no stories missed. Suspend→wake and quit→relaunch behave ident
 
 ---
 
-## 5. Surface the notification-denied state in the UI — no silent muting  🆕 NOT STARTED
+## 5. Surface the notification-denied state in the UI — no silent muting  ⛔ DESCOPED (Session 9)
+
+> **Descoped (Session 9): not deliverable on desktop with the current plugin.** Built the full feature
+> (backend `notification_health` command + pure mapping, DRY shared `Banner` + `NotificationBanner`,
+> `App.tsx` focus-recheck wiring) on `feat/notification-permission-banner`, all reviews clean incl.
+> whole-branch (opus). **Live E2E on the release build proved it can't work:** with macOS notifications
+> truly off, the banner never appeared. **Root cause (primary-source):** `tauri-plugin-notification`
+> 2.3.3 (latest) hardcodes desktop `permission_state()` **and** `request_permission()` to
+> `Ok(PermissionState::Granted)` (`desktop.rs`) — never queries the OS — so the denied state is
+> undetectable. Official Tauri docs are silent on desktop permission behavior (why it passed review);
+> the popular fork `Choochmeque/tauri-plugin-notifications` v0.4.6 stubs desktop the same. No
+> off-the-shelf fix — detecting desktop notification-denied needs a native `UNUserNotificationCenter`
+> query via `objc2` (standard native-app pattern, risky in an ad-hoc-signed build, and stub-able
+> incidental plumbing per the brief). **Reverted** the feature (`13e59a1`; code recoverable in history)
+> and **removed** the pre-existing dead startup `request_permission()` guard (`72a5825`). Delivery is
+> unchanged; macOS still prompts once on first delivery — only *denial detection* is missing. See
+> `STATUS.md` (Session 9) and the spec's Outcome section. If revisited, do the native `objc2` spike
+> **first** (prove the query works from the bundle AND matches `notify_rust`'s delivery subsystem). The
+> rest of this entry is kept for history.
 
 **Problem.** Notification permission is requested once at startup; if the user clicks **Don't
 Allow** (or later turns notifications off in System Settings), every `.show()` fails **silently** —
@@ -230,5 +248,7 @@ _Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / pr
 (Session 5); #2 (lossless ingestion) done (Session 6).** **#4 (sleep/wake catch-up) — WON'T DO**
 (Session 7: monotonic stopwatch scheduling is intentional; wall-clock rewrite + active-time
 persistence both rejected as over-engineering). Phase 3 (tray + native notifications) shipped
-(Session 8). **Open backlog: #5 (surface the notification-denied state).** The other still-unbuilt
-core requirement lives in `STATUS.md`: the dig-deeper research swarm._
+(Session 8). **#5 (surface the notification-denied state) — DESCOPED (Session 9):** unbuildable on
+desktop; `tauri-plugin-notification` never reads real permission state (stub always returns
+`Granted`). The remaining unbuilt **core** requirement is the dig-deeper research swarm (see
+`STATUS.md`) — the highest-value work left._
