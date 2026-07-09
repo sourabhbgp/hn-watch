@@ -263,6 +263,11 @@ matches land; it no longer only watches while you stare at it:
       `.show()` (I1's concern) is **not** a bug — `UNUserNotificationCenter.add` is thread-safe; no code fix.
 - [x] Cleaned up 4 throwaway test monitors created during verification (DB backed up); the two real
       monitors are untouched. Merged `feat/tray-notifications` → `main` (`--no-ff`), pushed; branch kept.
+- [x] **Follow-up fix `fix/dock-reopen`** (merged `a996411`): close-to-tray only hid the window and
+      nothing handled the macOS reopen event, so clicking the app's **Dock icon did nothing** — only the
+      tray "Show HN Watch" restored it. Now `RunEvent::Reopen` in the run loop calls the (now-public)
+      `tray::show_main_window`, so a Dock-icon click re-shows the window (Spotify-style). Verified live:
+      launch → close (hide, process alive) → Dock reopen → window restored, visible + frontmost.
 
 **Not yet (last phase)** — the dig-deeper research swarm (still mock in the UI).
 
