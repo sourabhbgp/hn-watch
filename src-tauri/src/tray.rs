@@ -4,7 +4,8 @@ use tauri::{AppHandle, Manager};
 
 /// Restore the main window: show it, un-minimize, and focus. Best-effort —
 /// every call is ignore-on-error so a missing/closing window never panics.
-fn show_main_window(app: &AppHandle) {
+/// Shared by the tray "Show" item and the macOS Dock-icon reopen handler.
+pub fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
