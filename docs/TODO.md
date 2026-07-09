@@ -22,14 +22,23 @@ This was the single biggest source of "is it even running?" confusion.
 
 **Proposed approach.**
 - Backend: emit tick-lifecycle events (e.g. `tick-started` / `tick-finished`) carrying
-  `{ monitor_id, checked_count, new_count, error? }`. Persist a `last_checked_at` (and maybe
-  `last_result`) per monitor.
-- UI: per-monitor status line — "Checking…" while a tick runs, then
-  "Last checked 3:31 PM · checked 30 · 0 new". Empty-feed message: "Checked N stories,
-  nothing matched yet" instead of a blank pane.
+  `{ monitor_id, checked_count, new_count, error? }`. Persist `last_checked_at` **and expose a
+  wall-clock `next_check_at`** per monitor (see TODO #4 — the schedule must be wall-clock based
+  so the countdown stays correct across sleep/restart).
+- UI: per-monitor **live countdown to the next check** — "next in 25m", ticking down
+  "24m… 23m…" (a small client-side timer against `next_check_at`), plus a status line —
+  "Last checked 3:31 PM · checked 30 · 0 new".
+- **Status chips** per monitor:
+  - **Checking…** while a tick runs.
+  - **Paused** when the app is open but ticks can't proceed (offline / Claude unavailable —
+    ties into TODO #3).
+  - **Resumed · catching up** transient state right after a laptop wake pushed a monitor
+    overdue (ties into TODO #4), then back to the normal countdown.
+- Empty-feed message: "Checked N stories, nothing matched yet" instead of a blank pane.
 
-**Acceptance.** From the UI alone you can always tell: is it checking now, when did it last
-check, how many stories it looked at, how many were new, and whether the last tick errored.
+**Acceptance.** From the UI alone you can always tell: a live countdown to the next check; is it
+checking now; when it last checked; how many stories it looked at; how many were new; whether the
+last tick errored; and whether it's paused or catching up after a wake.
 
 ---
 
@@ -96,6 +105,41 @@ mode shows a human-readable reason in the UI.
 
 ---
 
-_Order to tackle: #3 (make failures visible / preflight) and #1 (observability) pair naturally
-and are the highest user-facing value; #2 (lossless ingestion) is the correctness upgrade for
-scale. Do them one per session._
+## 4. Sleep/suspend & catch-up scheduling (wall-clock, not monotonic)
+
+**Problem.** The current scheduler sleeps on a monotonic timer (`tokio::time::sleep`). On macOS
+`Instant` uses `CLOCK_UPTIME_RAW`, which **does not advance while the machine is asleep**, and
+Tokio's timers are **paused during OS sleep** (verified: tokio issue #2784). So if you start an
+"every 30m" monitor, close the lid 5 min in, and reopen 45 min later, the 45 minutes of sleep
+don't count — the next tick fires ~25 min *after reopening*, not on wake and not during sleep.
+The schedule silently stretches by however long the laptop was asleep, and after a long sleep
+the fixed-30 fetch (TODO #2) can also miss stories.
+
+Inconsistency to fix too: **quitting** the app → each monitor ticks immediately on relaunch
+(catch-up), but **suspend→wake** does not catch up. Both should behave the same.
+
+**Proposed approach (unify normal / restart / wake under one rule: "tick anything overdue").**
+- Schedule off **persisted wall-clock time**, not a monotonic sleep: store `last_checked_at`
+  (`SystemTime`) per monitor; the next due time is `last_checked_at + interval`. Wall-clock moves
+  forward across suspend, so overdue-ness is computed correctly after a wake.
+- On **app start** and on **resume-from-sleep** (macOS `NSWorkspace` didWake via Tauri, or detect
+  a large gap on the next wake), re-evaluate all monitors and run a catch-up tick for any overdue.
+- Guard the wall-clock delta against absurd negative/huge jumps (NTP/manual clock changes).
+- Consider `tokio::time::interval` + `MissedTickBehavior::Skip` for the in-app cadence (drift-free,
+  explicit no-overlap) — see the scheduling research note; but the durable fix is the wall-clock
+  `last_checked` model above, which also subsumes restart behavior.
+- Feeds directly into TODO #1's UI: expose `next_check_at` so the UI shows a live countdown, and a
+  transient "Resumed · catching up" state after a wake.
+- Pair with TODO #2 (watermark + pagination) so a catch-up tick after a long sleep doesn't drop
+  stories.
+
+**Acceptance.** Close the lid mid-interval, reopen after > one interval → the monitor checks
+promptly on wake (catch-up), the UI countdown reflects reality immediately, no duplicate analysis,
+and (with #2) no stories missed. Suspend→wake and quit→relaunch behave identically.
+
+---
+
+_Order to tackle: #3 (make failures visible / preflight) and #1 (observability, incl. the live
+countdown + status chips) pair naturally and are the highest user-facing value; #4 (sleep/wake
+catch-up) makes the schedule trustworthy on a laptop and shares plumbing with #1; #2 (lossless
+ingestion) is the correctness upgrade for scale. Do them one per session._
