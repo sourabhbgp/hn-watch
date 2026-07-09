@@ -27,7 +27,7 @@ function fmtCountdown(nextCheckAt: number | null, now: number): string {
 }
 
 function statusLine(m: Monitor, checking: boolean): string {
-  if (checking) return "Checking…";
+  if (checking) return ""; // the chip already shows "Checking…"; avoid rendering it twice
   if (m.lastError) return "Last tick failed";
   if (m.lastCheckedAt == null) return "Never checked";
   return `Last checked ${fmtClock(m.lastCheckedAt)} · ${m.lastCheckedCount ?? 0} · ${m.lastNewCount ?? 0} new`;

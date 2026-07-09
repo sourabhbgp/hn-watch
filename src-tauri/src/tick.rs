@@ -52,9 +52,10 @@ pub fn build_feed_rows(
 }
 
 /// One tick: fetch recent HN, drop already-seen items, judge the rest with
-/// claude, persist matches, and record every judged id as seen. Returns the
-/// number of new matches inserted. Errors are propagated so the worker can log
-/// them; the worker keeps running regardless.
+/// claude, persist matches, and record every judged id as seen. Returns a
+/// TickOutcome with how many stories were scanned and how many new matches were
+/// inserted. Errors are propagated so the worker can log them; the worker keeps
+/// running regardless.
 pub async fn run_tick(db: &Arc<Mutex<Connection>>, monitor: &Monitor) -> Result<TickOutcome, String> {
     let recent = hn::fetch_recent(30).await?;
     let checked = recent.len();
