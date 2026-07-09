@@ -82,7 +82,18 @@ independent of how many arrived.
 
 ---
 
-## 3. Robust error handling + mandatory Claude Code startup check
+## 3. Robust error handling + mandatory Claude Code startup check  ✅ SHIPPED (Session 5)
+
+> Done on `feat/error-handling-preflight`. Startup preflight via a no-token `claude auth status --json`
+> probe (binary-absent → Missing without spawning); typed `AgentError`/`TickError` with stable `code()` +
+> friendly `message()`; a shared `Arc<Mutex<ClaudeHealth>>` seeded by preflight and kept live by ticks;
+> DTO `status:"paused"` (global) distinct from per-monitor transient `error`; a top banner with a
+> **Re-check** button + the `Paused` chip. Two Important health-transition bugs found by the whole-branch
+> review + live verification were fixed (early-return tick no longer clears a down-state; recovery clears
+> stale per-monitor errors). Live-verified across missing / logged-out / Re-check-recovery. `Resumed ·
+> catching up` chip remains deferred to #4. See `STATUS.md` (Session 5),
+> `docs/superpowers/specs/2026-07-09-error-handling-preflight-design.md`, and the plan. The rest of this
+> entry is kept for history.
 
 **Problem.** `claude` is mandatory — it's the whole engine (relevance judging + summaries).
 Right now, if the user hasn't installed Claude Code, or isn't logged in, or `claude` errors,
@@ -145,7 +156,7 @@ and (with #2) no stories missed. Suspend→wake and quit→relaunch behave ident
 
 ---
 
-_Order to tackle: **#1 (observability) is done (Session 4).** Next: #3 (make failures visible /
-preflight) pairs naturally with #1 and adds the `Paused` chip; #4 (sleep/wake catch-up) makes the
-schedule trustworthy on a laptop, shares plumbing with #1, and adds the `Resumed · catching up`
-chip; #2 (lossless ingestion) is the correctness upgrade for scale. Do them one per session._
+_Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / preflight) done (Session 5).**
+Next: #4 (sleep/wake catch-up) makes the schedule trustworthy on a laptop, shares plumbing with #1, and adds
+the `Resumed · catching up` chip; #2 (lossless ingestion) is the correctness upgrade for scale. Do them one
+per session._

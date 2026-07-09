@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Monitor, FeedItem } from "./types";
+import type { Monitor, FeedItem, ClaudeHealth } from "./types";
 
 export const listMonitors = () => invoke<Monitor[]>("list_monitors");
 export const listFeed = () => invoke<FeedItem[]>("list_feed");
@@ -27,3 +27,13 @@ export const onTickStarted = (cb: (monitorId: string) => void) =>
 // Fires when a monitor finishes a tick (even with 0 new). Returns an unlisten function.
 export const onTickFinished = (cb: (p: TickFinished) => void) =>
   listen<TickFinished>("tick-finished", (e) => cb(e.payload));
+
+// Current Claude availability (drives the top banner + paused status).
+export const getClaudeHealth = () => invoke<ClaudeHealth>("claude_health");
+
+// Re-run the startup preflight on demand (banner "Re-check" button).
+export const recheckClaude = () => invoke<ClaudeHealth>("recheck_claude");
+
+// Fires when Claude health changes (preflight, recheck, or a tick flip).
+export const onClaudeHealth = (cb: (h: ClaudeHealth) => void) =>
+  listen<ClaudeHealth>("claude-health", (e) => cb(e.payload));

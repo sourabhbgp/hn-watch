@@ -115,6 +115,58 @@ preflight; sleep/wake catch-up scheduling (wall-clock, not monotonic).
 laptop sleep the wall-clock countdown and the real next tick can drift. This feature only exposes the
 honest `nextCheckAt`; making the schedule itself wall-clock/catch-up correct is TODO #4.
 
+## Session 5 — Error handling + Claude preflight (TODO #3)
+
+**Done** — Claude failures are no longer silent; a fresh clone learns immediately if `claude` is
+missing or logged out, and every tick failure carries a human-readable reason:
+
+- [x] **Typed errors** replace ad-hoc strings on the tick path: `AgentError`
+      (`NotFound`/`NotAuthenticated`/`Timeout`/`Failed`) and `TickError` (`Hn`/`Agent`/`Db`), each with a
+      stable `code()` (drives paused-vs-error + global health) and a friendly `message()` (stored in
+      `last_error`, shown in the monitor tooltip). Classification lives in **pure, unit-tested functions**
+      (`is_auth_failure`, `classify_auth`, `next_claude_health`) mirroring the existing `parse_verdict`/`find_claude`
+      seam. **Non-goal held:** a 0-match or unparseable judge response stays `Ok([])` — never an error.
+- [x] **Startup preflight** (`agent::preflight`, async in `setup` so the window never blocks): binary
+      absent → `Missing` without spawning; otherwise a **no-token** `claude auth status --json` probe →
+      `Ok`/`NotAuthenticated` (empirically grounded on claude 2.1.205 — `auth status` makes no model call).
+      DRY: one `claude_command()` helper carries the temp-dir/`PWD`/stdin-null sandbox, shared by the judge
+      call and the probe. Kept `--safe-mode` (never `--bare`, which strips OAuth/keychain auth).
+- [x] **Shared `Arc<Mutex<ClaudeHealth>>`** seeded by preflight and kept live by ticks: only
+      `claude_missing`/`claude_auth` flip global health; a **real** successful tick (agent actually ran)
+      clears it; transient errors and **no-op early-return ticks** leave it unchanged. The DTO maps global
+      health → `status:"paused"` (overrides per-monitor `error`). New commands `claude_health` +
+      `recheck_claude`; recovery to `Ok` clears stale per-monitor errors so monitors return to `active`.
+- [x] **UI:** a persistent top **banner** (rust/`hn-soft` tokens) with a **Re-check** button —
+      "Claude Code not found …" / "Claude Code isn't logged in …"; the previously-inert **`Paused`** chip on
+      each monitor now lights up when Claude is globally unavailable. No new colors — existing tokens only.
+- [x] Built via subagent-driven development: brainstorm → spec
+      (`docs/superpowers/specs/2026-07-09-error-handling-preflight-design.md`) → plan
+      (`docs/superpowers/plans/2026-07-09-error-handling-preflight.md`) → 2 implementer units (Rust, then
+      frontend) each with a task review → whole-branch review (opus).
+- [x] **Two Important bugs the whole-branch review + live verification caught, then fixed** (commits
+      `00ce131`, `b02727e`): **(A)** a tick where every fetched story was already seen early-returns `Ok`
+      without calling the agent — the scheduler used to treat that as "Claude healthy" and wrongly cleared a
+      legitimate Missing/logged-out banner; now health only clears when the agent actually ran
+      (`TickOutcome.agent_ran` + pure `next_claude_health`). **(B)** preflight/Re-check recovery set health
+      `Ok` but left stale `last_error`, so recovered monitors showed a false `error` chip; now recovery
+      clears all monitor errors via a shared `apply_claude_health` helper. Also: the scheduler now logs the
+      raw tick error (`{e:?}`) so HN/db failures leave a diagnostic trail.
+- [x] **Verified:** `cargo test` 27/27, `tsc`/`vite build` clean, zero warnings. **Live-verified in the
+      native window** on the fixed release build: missing-binary → "not found" banner + both monitors Paused;
+      fake logged-out → "isn't logged in" banner + both Paused (confirming bug A — an all-seen monitor's
+      early-return no longer clears the down-state); flip the fake `claude` to healthy + click **Re-check** →
+      banner clears, both monitors return to `active` "next in 30m · checked HH:MM" with no stale error.
+      (Down states forced with an `HN_WATCH_CLAUDE_BIN` env override pointing at a fake script — no logout
+      needed.)
+- [x] Merged `feat/error-handling-preflight` → `main` (`--no-ff`), pushed; branch kept on origin with the
+      full step-by-step history (spec → plan → 6 Rust commits → 3 frontend commits → 2 fix commits).
+
+**Deferred (Minor, recorded for a later cleanup):** `ClaudeHealthPayload`/`ClaudeHealthDto` are the same
+`{status,message}` shape defined twice (plan-authorized for task independence); the scheduler matches on
+string `code` literals rather than the enum; the App Re-check does a harmless double state-update. None
+affect correctness. **Known:** `recheck_claude` clears every monitor's `last_error` on recovery, including a
+stale non-Claude (`hn_error`) one — it re-populates on the next tick if still failing.
+
 ## How to run
 
 ```bash

@@ -22,6 +22,8 @@ pub fn run() {
             commands::list_monitors,
             commands::delete_monitor,
             commands::list_feed,
+            commands::claude_health,
+            commands::recheck_claude,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

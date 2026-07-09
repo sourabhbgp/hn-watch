@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-/// What one tick did: how many stories it scanned and how many new matches it inserted.
+/// What one tick did: how many stories it scanned, how many new matches it inserted,
+/// and whether this tick actually invoked the agent (false = nothing unseen, judge skipped).
 pub struct TickOutcome {
     pub checked: usize,
     pub new: usize,
+    pub agent_ran: bool,
 }
 
 pub fn now_secs() -> i64 {
@@ -51,35 +53,69 @@ pub fn build_feed_rows(
         .collect()
 }
 
+/// A classified tick failure. `code()` feeds paused-vs-error + global health;
+/// `message()` is the friendly reason stored in `last_error`.
+#[derive(Debug)]
+pub enum TickError {
+    // Underlying fetch error retained (mirrors Db's shape) for logs/Debug; the
+    // user-facing message() stays a generic, friendly string.
+    Hn(#[allow(dead_code)] String),
+    Agent(agent::AgentError),
+    Db(String),
+}
+
+impl TickError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            TickError::Hn(_) => "hn_error",
+            TickError::Agent(a) => a.code(),
+            TickError::Db(_) => "db_error",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            TickError::Hn(_) => "Couldn't reach Hacker News".into(),
+            TickError::Agent(a) => a.message(),
+            TickError::Db(e) => format!("Local database error: {e}"),
+        }
+    }
+}
+
 /// One tick: fetch recent HN, drop already-seen items, judge the rest with
 /// claude, persist matches, and record every judged id as seen. Returns a
 /// TickOutcome with how many stories were scanned and how many new matches were
 /// inserted. Errors are propagated so the worker can log them; the worker keeps
 /// running regardless.
-pub async fn run_tick(db: &Arc<Mutex<Connection>>, monitor: &Monitor) -> Result<TickOutcome, String> {
-    let recent = hn::fetch_recent(30).await?;
+pub async fn run_tick(
+    db: &Arc<Mutex<Connection>>,
+    monitor: &Monitor,
+) -> Result<TickOutcome, TickError> {
+    let recent = hn::fetch_recent(30).await.map_err(TickError::Hn)?;
     let checked = recent.len();
 
     let seen = {
-        let conn = db.lock().map_err(|_| "db poisoned".to_string())?;
-        db::list_seen(&conn, &monitor.id).map_err(|e| e.to_string())?
+        let conn = db.lock().map_err(|_| TickError::Db("db poisoned".into()))?;
+        db::list_seen(&conn, &monitor.id).map_err(|e| TickError::Db(e.to_string()))?
     };
     let unseen = select_unseen(recent, &seen);
     if unseen.is_empty() {
-        return Ok(TickOutcome { checked, new: 0 });
+        return Ok(TickOutcome { checked, new: 0, agent_ran: false });
     }
 
-    let verdicts = agent::judge(&monitor.prompt, &unseen).await?;
+    let verdicts = agent::judge(&monitor.prompt, &unseen)
+        .await
+        .map_err(TickError::Agent)?;
     let rows = build_feed_rows(&monitor.id, &unseen, &verdicts, now_secs());
 
-    let conn = db.lock().map_err(|_| "db poisoned".to_string())?;
+    let conn = db.lock().map_err(|_| TickError::Db("db poisoned".into()))?;
     for row in &rows {
-        db::insert_feed_item(&conn, row).map_err(|e| e.to_string())?;
+        db::insert_feed_item(&conn, row).map_err(|e| TickError::Db(e.to_string()))?;
     }
     for item in &unseen {
-        db::mark_seen(&conn, &monitor.id, &item.hn_id).map_err(|e| e.to_string())?;
+        db::mark_seen(&conn, &monitor.id, &item.hn_id).map_err(|e| TickError::Db(e.to_string()))?;
     }
-    Ok(TickOutcome { checked, new: rows.len() })
+    Ok(TickOutcome { checked, new: rows.len(), agent_ran: true })
 }
 
 #[cfg(test)]
@@ -119,5 +155,20 @@ mod tests {
         let items = vec![item("1")];
         let verdicts = vec![Verdict { hn_id: "999".into(), summary: "s".into(), reason: "r".into() }];
         assert_eq!(build_feed_rows("m1", &items, &verdicts, 1).len(), 0);
+    }
+
+    #[test]
+    fn tick_error_projection() {
+        assert_eq!(TickError::Hn("boom".into()).code(), "hn_error");
+        assert_eq!(TickError::Db("x".into()).code(), "db_error");
+        assert_eq!(
+            TickError::Agent(agent::AgentError::NotAuthenticated).code(),
+            "claude_auth"
+        );
+        assert!(TickError::Hn("boom".into()).message().contains("Hacker News"));
+        assert_eq!(
+            TickError::Agent(agent::AgentError::Timeout).message(),
+            agent::AgentError::Timeout.message()
+        );
     }
 }
