@@ -136,7 +136,19 @@ mode shows a human-readable reason in the UI.
 
 ---
 
-## 4. Sleep/suspend & catch-up scheduling (wall-clock, not monotonic)
+## 4. Sleep/suspend & catch-up scheduling (wall-clock, not monotonic)  ⛔ WON'T DO (Session 7 decision)
+
+> **Decision (Session 7): the monotonic "stopwatch" scheduling is intentional — do not rewrite it.**
+> The interval is meant to count **active runtime only**: it advances while the app is running and the
+> laptop is awake, and **pauses** (never rushes) across laptop sleep. `tokio::time::sleep` already gives
+> exactly this — it freezes during OS sleep and resumes the leftover on wake. On app **start** every
+> monitor does a **fresh run**, then ticks every interval; stopwatch progress is deliberately **not**
+> persisted across an app close (a close discards the in-flight timer, a relaunch does a fresh run —
+> lossless anyway thanks to the watermark). Both the **wall-clock catch-up rewrite** below **and** an
+> **"active-time" heartbeat** to survive app-close were considered and **rejected as over-engineering**.
+> The only change shipped was cosmetic: the countdown shows a calm `checking soon…` instead of a stuck
+> `due now` during the post-wake catch-up window (`Sidebar.tsx`, `fmtCountdown`). See `STATUS.md`
+> (Session 7). The original write-up is kept below for history only — **do not implement it.**
 
 **Problem.** The current scheduler sleeps on a monotonic timer (`tokio::time::sleep`). On macOS
 `Instant` uses `CLOCK_UPTIME_RAW`, which **does not advance while the machine is asleep**, and
@@ -171,6 +183,7 @@ and (with #2) no stories missed. Suspend→wake and quit→relaunch behave ident
 ---
 
 _Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / preflight) done (Session 5);
-#2 (lossless ingestion) done (Session 6).** Remaining: **#4 (sleep/wake catch-up)** — makes the schedule
-trustworthy on a laptop, shares plumbing with #1, adds the `Resumed · catching up` chip; its catch-up tick is
-already lossless now that ingestion is watermark-based. Do them one per session._
+#2 (lossless ingestion) done (Session 6).** **#4 (sleep/wake catch-up) — WON'T DO** (Session 7: monotonic
+stopwatch scheduling is intentional; wall-clock rewrite + active-time persistence both rejected as
+over-engineering). **This backlog is now empty.** Next work lives in `STATUS.md`: Phase 3 (tray + native
+notifications) and the dig-deeper research swarm — both still-unbuilt core requirements._
