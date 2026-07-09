@@ -161,6 +161,7 @@ pub fn create_monitor(
         last_checked_count: None,
         last_new_count: None,
         last_error: None,
+        watermark: None,
     };
     if monitor.name.is_empty() || monitor.prompt.is_empty() {
         return Err("name and prompt are required".into());
@@ -294,7 +295,7 @@ mod tests {
             id: "m1".into(), name: "n".into(), prompt: "p".into(),
             interval_secs: 1800, created_at: 1,
             last_checked_at: Some(10), last_checked_count: Some(5),
-            last_new_count: Some(0), last_error: None,
+            last_new_count: Some(0), last_error: None, watermark: None,
         };
         db::insert_monitor(&c, &m).unwrap();
         // Claude down → paused, regardless of last_error
