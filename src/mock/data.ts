@@ -11,6 +11,11 @@ export const MONITORS: Monitor[] = [
     intervalLabel: "every 30m",
     status: "active",
     matchCount: 12,
+    lastCheckedAt: null,
+    nextCheckAt: null,
+    lastCheckedCount: null,
+    lastNewCount: null,
+    lastError: null,
   },
   {
     id: "m2",
@@ -19,6 +24,11 @@ export const MONITORS: Monitor[] = [
     intervalLabel: "every 1h",
     status: "active",
     matchCount: 5,
+    lastCheckedAt: null,
+    nextCheckAt: null,
+    lastCheckedCount: null,
+    lastNewCount: null,
+    lastError: null,
   },
   {
     id: "m3",
@@ -27,6 +37,11 @@ export const MONITORS: Monitor[] = [
     intervalLabel: "every 2h",
     status: "paused",
     matchCount: 3,
+    lastCheckedAt: null,
+    nextCheckAt: null,
+    lastCheckedCount: null,
+    lastNewCount: null,
+    lastError: null,
   },
   {
     id: "m4",
@@ -35,6 +50,11 @@ export const MONITORS: Monitor[] = [
     intervalLabel: "every 15m",
     status: "error",
     matchCount: 0,
+    lastCheckedAt: null,
+    nextCheckAt: null,
+    lastCheckedCount: null,
+    lastNewCount: null,
+    lastError: null,
   },
 ];
 
