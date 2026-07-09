@@ -26,11 +26,18 @@ function fmtCountdown(nextCheckAt: number | null, now: number): string {
   return `next in ${Math.round(rem / 60)}m`;
 }
 
-function statusLine(m: Monitor, checking: boolean): string {
-  if (checking) return ""; // the chip already shows "Checking…"; avoid rendering it twice
-  if (m.lastError) return "Last tick failed";
+// When the monitor last ran (or its non-running state). Decoupled from the chip
+// so it doesn't flicker while a tick is in flight.
+function timeLine(m: Monitor): string {
+  if (m.lastError) return "Last check failed";
   if (m.lastCheckedAt == null) return "Never checked";
-  return `Last checked ${fmtClock(m.lastCheckedAt)} · ${m.lastCheckedCount ?? 0} · ${m.lastNewCount ?? 0} new`;
+  return `Last checked ${fmtClock(m.lastCheckedAt)}`;
+}
+
+// That tick's counts — only meaningful once a tick has succeeded.
+function statsLine(m: Monitor): string | null {
+  if (m.lastError || m.lastCheckedAt == null) return null;
+  return `${m.lastCheckedCount ?? 0} scanned · ${m.lastNewCount ?? 0} new`;
 }
 
 function MonitorRow({
@@ -48,20 +55,41 @@ function MonitorRow({
   onSelect: () => void;
   onDelete: () => void;
 }) {
+  const chip = checking ? (
+    <span className="rounded-full bg-hn-soft px-2 py-0.5 font-mono text-[10px] text-rust">
+      <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-rust align-middle" />
+      Checking…
+    </span>
+  ) : monitor.status === "error" ? (
+    <span
+      title={monitor.lastError ?? ""}
+      className="rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-rust"
+    >
+      error
+    </span>
+  ) : (
+    <span className="rounded-full bg-paper px-2 py-0.5 font-mono text-[10px] text-faint">
+      {fmtCountdown(monitor.nextCheckAt, now)}
+    </span>
+  );
+
+  const stats = statsLine(monitor);
+
   return (
     <div
       className={`group w-full rounded-lg px-3 py-2.5 transition-colors border ${
         selected ? "bg-hn-soft border-hn-border" : "bg-transparent border-transparent hover:bg-card"
       }`}
     >
+      {/* line 1 — status dot · name (takes the row) · delete on hover */}
       <div className="flex items-center gap-2">
         <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[monitor.status]}`} />
-        <button onClick={onSelect} className="truncate text-left text-[13.5px] font-semibold text-ink">
+        <button
+          onClick={onSelect}
+          className="min-w-0 flex-1 truncate text-left text-[13.5px] font-semibold text-ink"
+        >
           {monitor.name}
         </button>
-        <span className="ml-auto shrink-0 rounded-full bg-paper px-1.5 py-0.5 font-mono text-[10px] text-faint">
-          {monitor.matchCount}
-        </span>
         <button
           onClick={onDelete}
           title="Delete monitor"
@@ -70,28 +98,22 @@ function MonitorRow({
           ×
         </button>
       </div>
+
       <button onClick={onSelect} className="block w-full text-left">
-        <p className="mt-1 line-clamp-2 pl-4 text-[11.5px] leading-snug text-faint">{monitor.prompt}</p>
-        <div className="mt-1.5 flex items-center gap-2 pl-4">
-          {checking ? (
-            <span className="shrink-0 rounded-full bg-hn-soft px-1.5 py-0.5 font-mono text-[10px] text-rust">
-              <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-rust align-middle" />
-              Checking…
-            </span>
-          ) : monitor.status === "error" ? (
-            <span
-              title={monitor.lastError ?? ""}
-              className="shrink-0 rounded-full bg-paper px-1.5 py-0.5 font-mono text-[10px] text-rust"
-            >
-              error
-            </span>
-          ) : (
-            <span className="shrink-0 rounded-full bg-paper px-1.5 py-0.5 font-mono text-[10px] text-faint">
-              {fmtCountdown(monitor.nextCheckAt, now)}
-            </span>
-          )}
-          <span className="truncate font-mono text-[10.5px] text-faint">{statusLine(monitor, checking)}</span>
+        {/* line 2 — prompt */}
+        <p className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-faint">{monitor.prompt}</p>
+
+        {/* line 3 — chip (countdown / Checking… / error) · total matches */}
+        <div className="mt-2 flex items-center justify-between gap-2">
+          {chip}
+          <span className="shrink-0 font-mono text-[10px] text-faint">
+            {monitor.matchCount} {monitor.matchCount === 1 ? "match" : "matches"}
+          </span>
         </div>
+
+        {/* line 4 — when it last ran; line 5 — that tick's counts (each on its own row, never clipped) */}
+        <p className="mt-1.5 font-mono text-[10.5px] text-faint">{timeLine(monitor)}</p>
+        {stats && <p className="mt-0.5 font-mono text-[10.5px] text-faint">{stats}</p>}
       </button>
     </div>
   );
@@ -129,7 +151,7 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-line bg-card/40">
+    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-line bg-card/40">
       <div className="flex items-center gap-2.5 px-4 py-4">
         <div className="h-8 w-8 shrink-0 rounded-lg bg-hn grid place-items-center">
           <svg viewBox="216 216 592 592" className="h-6 w-6" aria-hidden="true">
