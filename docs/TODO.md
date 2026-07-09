@@ -48,7 +48,21 @@ last tick errored; and whether it's paused or catching up after a wake.
 
 ---
 
-## 2. Lossless ingestion under variable volume — never miss, never re-analyze
+## 2. Lossless ingestion under variable volume — never miss, never re-analyze  ✅ SHIPPED (Session 6)
+
+> Done on `feat/lossless-ingestion`. Per-monitor nullable `watermark` (additive migration) replaces the
+> fixed newest-30 fetch; each tick pulls everything since `watermark.unwrap_or(now − 1h)` via paginated
+> `hn::fetch_since` (`created_at_i>=W`, 100/page, 10-page/1000-hit cap logged if hit). Unseen set judged in
+> fail-closed `claude` batches of ≤30 (sequential within a tick). Watermark advances to `max(created_at) −
+> 5min` (monotonic, absurd-ts-guarded); the 5-min margin covers Algolia's async indexing. Commit order
+> insert → seen → watermark (last) = crash-safe without a transaction. Dedup (`seen`+`UNIQUE`) unchanged. A
+> **Critical** whole-branch-review find was fixed (`7d47997`): the scheduler reused a frozen `Monitor` so
+> the persisted watermark was never read back in-session (permanent miss window at 1h intervals) — `run_tick`
+> now returns the watermark and the worker carries it forward. Live-verified: carry-forward (`since`
+> advances between ticks), burst (167 stories / 2 pages / 30-30-25 batches / no dup cards), fail-closed (162
+> fetched, judge fails → nothing committed, watermark unadvanced). See `STATUS.md` (Session 6),
+> `docs/superpowers/specs/2026-07-09-lossless-ingestion-design.md`, and the plan. The rest of this entry is
+> kept for history.
 
 **Problem.** Between two 30-min ticks the number of new HN stories varies a lot — sometimes
 5, sometimes 200, sometimes 100. We must guarantee **(a) no story is missed** and
@@ -156,7 +170,7 @@ and (with #2) no stories missed. Suspend→wake and quit→relaunch behave ident
 
 ---
 
-_Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / preflight) done (Session 5).**
-Next: #4 (sleep/wake catch-up) makes the schedule trustworthy on a laptop, shares plumbing with #1, and adds
-the `Resumed · catching up` chip; #2 (lossless ingestion) is the correctness upgrade for scale. Do them one
-per session._
+_Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / preflight) done (Session 5);
+#2 (lossless ingestion) done (Session 6).** Remaining: **#4 (sleep/wake catch-up)** — makes the schedule
+trustworthy on a laptop, shares plumbing with #1, adds the `Resumed · catching up` chip; its catch-up tick is
+already lossless now that ingestion is watermark-based. Do them one per session._

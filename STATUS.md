@@ -167,6 +167,51 @@ string `code` literals rather than the enum; the App Re-check does a harmless do
 affect correctness. **Known:** `recheck_claude` clears every monitor's `last_error` on recovery, including a
 stale non-Claude (`hn_error`) one — it re-populates on the next tick if still failing.
 
+## Session 6 — Lossless ingestion under variable volume (TODO #2)
+
+**Done** — a monitor can no longer silently miss stories in a burst; ingestion is complete at any volume:
+
+- [x] **Per-monitor watermark** replaces the fixed "newest 30" fetch. New nullable `monitors.watermark`
+      (additive `ensure_column` migration — upgrades existing on-disk DBs to `NULL`). Each tick fetches
+      **everything since `watermark.unwrap_or(now − 1h)`** — one unified path, so a fresh *or* migrated
+      monitor looks back an hour on its first tick, then carries the watermark forward. `HnItem` now
+      carries `created_at` (Algolia `created_at_i`).
+- [x] **Paginated delta fetch** (`hn::fetch_since`): `search_by_date?numericFilters=created_at_i>=W`,
+      pages of 100 until a short page or a 10-page (1000-hit) safety cap (logged if hit). A burst of 5 or
+      500 is pulled in full — nothing beyond 30 is dropped.
+- [x] **Chunked, fail-closed judge:** the unseen set is split into `claude` calls of ≤30, run
+      **sequentially within a tick** (so one burst can't grab all 4 shared-semaphore permits and stall
+      other monitors). Any batch failure returns `Err` **before any DB write** — nothing committed, the
+      watermark not advanced, the whole window re-judged next tick.
+- [x] **Watermark advance = `max(created_at) − 5min`, monotonic**, ignoring absurd timestamps. The
+      trailing 5-min margin is the real correctness fix: Algolia indexes asynchronously, so a story with
+      an older timestamp can be indexed *after* newer ones — an exact-max watermark would skip it forever;
+      the margin re-scans that tail each tick (free, `seen`-deduped). Commit order **insert → mark seen →
+      advance watermark (last)** makes a mid-commit crash safe with no transaction. Dedup (`seen` +
+      `UNIQUE`) is untouched — it's what makes the re-scans free.
+- [x] Built via subagent-driven development: brainstorm → spec
+      (`docs/superpowers/specs/2026-07-09-lossless-ingestion-design.md`) → plan
+      (`docs/superpowers/plans/2026-07-09-lossless-ingestion.md`) → 1 implementer unit (4 Rust commits) →
+      task review (Approved) → **whole-branch review (opus)**.
+- [x] **Critical bug the whole-branch review caught + fixed** (commit `7d47997`): the scheduler reused a
+      **frozen `Monitor`** — `run_tick` persisted the advanced watermark to the DB but nothing read it back
+      in-session, so `since` never moved for a running worker (at the UI's 1h interval that's a permanent
+      per-tick miss window — the exact guarantee this ticket delivers). Fix: `run_tick` returns the new
+      watermark, the worker binds `let mut monitor` and adopts it each tick, and the all-seen early-return
+      persists it too. (Task-scoped tests were all green — only the broad review saw it.)
+- [x] **Verified:** `cargo test` 34/34, `cargo build` zero warnings. **Live-verified in the native app**
+      (instrumented dev run, instrumentation reverted): (1) **carry-forward** — `since` advances between
+      ticks (`None`→`W1`→`W2`) and the window narrows 30→7; migration upgraded the real pre-existing DB
+      non-destructively; (2) **burst** — 167 stories pulled across 2 Algolia pages, 85 unseen judged in
+      batches of 30/30/25, no duplicate feed cards; (3) **fail-closed** — a forced judge failure over a
+      162-story window committed nothing and left the watermark unadvanced.
+- [x] Merged `feat/lossless-ingestion` → `main` (`--no-ff`), pushed; branch kept on origin with the full
+      step-by-step history (spec → plan → 4 Rust commits → 1 fix commit).
+
+**Not yet (next phases)** — system tray + native notifications (Phase 3); the dig-deeper research swarm
+(still mock in the UI). Remaining backlog refinement: TODO #4 (sleep/wake wall-clock catch-up) — its
+catch-up tick will already be lossless now that ingestion is watermark-based.
+
 ## How to run
 
 ```bash
