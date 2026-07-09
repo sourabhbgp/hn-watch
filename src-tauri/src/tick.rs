@@ -7,6 +7,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+/// First-tick look-back when a monitor has no watermark yet (1 hour).
+pub const LOOKBACK_SECS: i64 = 3600;
+/// Trailing margin behind the newest story, guarding against Algolia's async indexing (5 min).
+pub const WATERMARK_MARGIN_SECS: i64 = 300;
+/// Stories per `claude` call.
+pub const BATCH_SIZE: usize = 30;
+/// Tolerance for clock skew when rejecting far-future timestamps (1 hour).
+const CLOCK_SKEW_SECS: i64 = 3600;
+
 /// What one tick did: how many stories it scanned, how many new matches it inserted,
 /// and whether this tick actually invoked the agent (false = nothing unseen, judge skipped).
 pub struct TickOutcome {
@@ -24,6 +33,32 @@ pub fn now_secs() -> i64 {
 
 pub fn select_unseen(items: Vec<HnItem>, seen: &HashSet<String>) -> Vec<HnItem> {
     items.into_iter().filter(|i| !seen.contains(&i.hn_id)).collect()
+}
+
+/// Drop cross-page duplicate ids (pagination can re-see an item), keeping the first
+/// occurrence and preserving order.
+pub fn dedupe_by_hn_id(items: Vec<HnItem>) -> Vec<HnItem> {
+    let mut seen: HashSet<String> = HashSet::new();
+    items.into_iter().filter(|i| seen.insert(i.hn_id.clone())).collect()
+}
+
+/// Compute the next watermark: `MARGIN` behind the newest valid `created_at`, monotonic
+/// (never regresses below `current`). Ignores absurd timestamps (<= 0 or far future) so a
+/// malformed hit can't rocket the watermark forward. Returns `None` when there is no valid
+/// timestamp to anchor to (caller keeps the current watermark, including `NULL`).
+pub fn advance_watermark(
+    current: Option<i64>,
+    items: &[HnItem],
+    margin: i64,
+    now: i64,
+) -> Option<i64> {
+    let candidate = items
+        .iter()
+        .map(|i| i.created_at)
+        .filter(|&t| t > 0 && t <= now + CLOCK_SKEW_SECS)
+        .max()?;
+    let proposed = candidate - margin;
+    Some(current.map_or(proposed, |c| c.max(proposed)))
 }
 
 pub fn build_feed_rows(
@@ -127,6 +162,52 @@ mod tests {
             hn_id: id.into(), title: format!("t{id}"), url: "https://x.dev/a".into(),
             domain: "x.dev".into(), points: 10, num_comments: 2, created_at: 1_700_000_000,
         }
+    }
+
+    #[test]
+    fn dedupe_keeps_first_occurrence_in_order() {
+        let items = vec![item("1"), item("2"), item("1"), item("3")];
+        let out = dedupe_by_hn_id(items);
+        let ids: Vec<&str> = out.iter().map(|i| i.hn_id.as_str()).collect();
+        assert_eq!(ids, vec!["1", "2", "3"]); // dup "1" dropped, order preserved
+    }
+
+    fn item_at(id: &str, created_at: i64) -> HnItem {
+        HnItem {
+            hn_id: id.into(), title: "t".into(), url: "u".into(),
+            domain: "d".into(), points: 1, num_comments: 1, created_at,
+        }
+    }
+
+    #[test]
+    fn advance_watermark_sets_max_minus_margin() {
+        let items = vec![item_at("a", 100), item_at("b", 500), item_at("c", 300)];
+        // now large so nothing is "far future"; margin 5 -> 500 - 5
+        assert_eq!(advance_watermark(None, &items, 5, 10_000), Some(495));
+    }
+
+    #[test]
+    fn advance_watermark_is_monotonic() {
+        let items = vec![item_at("a", 500)];
+        // current already ahead of (max - margin) -> unchanged
+        assert_eq!(advance_watermark(Some(1000), &items, 5, 10_000), Some(1000));
+    }
+
+    #[test]
+    fn advance_watermark_ignores_absurd_timestamps() {
+        let now = 10_000;
+        // 0 and far-future dropped; only 500 counts -> 500 - 5
+        let items = vec![item_at("a", 0), item_at("b", now + 999_999), item_at("c", 500)];
+        assert_eq!(advance_watermark(None, &items, 5, now), Some(495));
+        // all absurd -> None (nothing to anchor to)
+        let junk = vec![item_at("a", 0), item_at("b", now + 999_999)];
+        assert_eq!(advance_watermark(Some(42), &junk, 5, now), None);
+        assert_eq!(advance_watermark(None, &junk, 5, now), None);
+    }
+
+    #[test]
+    fn advance_watermark_empty_is_none() {
+        assert_eq!(advance_watermark(Some(42), &[], 5, 10_000), None);
     }
 
     #[test]
