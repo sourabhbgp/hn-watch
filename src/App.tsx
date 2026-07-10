@@ -5,6 +5,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Feed } from "./components/Feed";
 import { DigDeeperPanel } from "./components/DigDeeperPanel";
 import { ClaudeBanner } from "./components/ClaudeBanner";
+import { matchesQuery } from "./lib/search";
 import {
   listMonitors,
   listFeed,
@@ -22,6 +23,7 @@ function App() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [digItem, setDigItem] = useState<FeedItem | null>(null);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
@@ -68,19 +70,35 @@ function App() {
     [monitors, selectedMonitorId],
   );
 
-  const visibleFeed = useMemo(
+  // Feed filtered by the selected monitor only — used both for the search
+  // haystack and for the "X of Y" total in the header.
+  const monitorFeed = useMemo(
     () => (selectedMonitorId ? feed.filter((f) => f.monitorId === selectedMonitorId) : feed),
     [feed, selectedMonitorId],
   );
+
+  // Search stacks on top of the monitor filter (empty query = no-op).
+  const visibleFeed = useMemo(() => {
+    const q = query.trim();
+    return q ? monitorFeed.filter((f) => matchesQuery(f, q)) : monitorFeed;
+  }, [monitorFeed, query]);
 
   const handleCreate = async (name: string, prompt: string, intervalSecs: number) => {
     await createMonitor(name, prompt, intervalSecs);
     await refresh();
   };
 
+  const handleSelectMonitor = (id: string | null) => {
+    setSelectedMonitorId(id);
+    setQuery(""); // each view starts with a fresh search
+  };
+
   const handleDelete = async (id: string) => {
     await deleteMonitor(id);
-    if (selectedMonitorId === id) setSelectedMonitorId(null);
+    if (selectedMonitorId === id) {
+      setSelectedMonitorId(null);
+      setQuery("");
+    }
     await refresh();
   };
 
@@ -101,7 +119,7 @@ function App() {
         <Sidebar
           monitors={monitors}
           selectedId={selectedMonitorId}
-          onSelect={setSelectedMonitorId}
+          onSelect={handleSelectMonitor}
           onCreate={handleCreate}
           onDelete={handleDelete}
           now={now}
@@ -110,6 +128,9 @@ function App() {
 
         <Feed
           items={visibleFeed}
+          totalCount={monitorFeed.length}
+          query={query}
+          onQueryChange={setQuery}
           monitors={monitors}
           activeMonitor={activeMonitor}
           onDigDeeper={setDigItem}
