@@ -302,11 +302,54 @@ the default (no-query) feed and its cap are unchanged.
 
 ---
 
+## 8. Persist dig-deeper briefs — don't lose (and don't re-pay for) research
+
+**Problem.** A completed dig-deeper brief lives only in the panel's React state. Closing the
+drawer (`App.tsx` sets `digItem = null`, unmounting `DigDeeperPanel`) discards the brief, the
+angle lanes, and the streamed lines. Reopening "Dig deeper" on the same story re-runs the whole
+swarm from scratch — a fresh planner + parallel workers + synthesis — so the research is gone
+**and** you pay real Sonnet usage again to regenerate the same brief.
+
+**Why it matters.** UX: you can't step away and come back to a brief. Cost: the shared runtime
+pays twice (or N times) for the same story — the exact "same runtime, mind the cost" concern the
+brief calls out. Raised by the user after Session 14 live verification.
+
+**Scope note.** The verbatim requirement mandates local persistence for **monitors + feed**
+("survive an app restart"), but **not** for the dig-deeper brief — the swarm ask is only "compile
+into one combined brief," and the brief invites stubbing incidental plumbing. So this is a
+deliberate enhancement, not a requirement gap. Building it is also a strong design point to
+discuss (caching to avoid double-paying the runtime).
+
+**Current behavior.** `swarm.rs` reads the story via `db::get_feed_item` and only **emits** the
+brief as a `swarm-brief-ready` event — it never writes it back. The DB has only `monitors`,
+`feed_items`, `seen`; there is no briefs table.
+
+**Proposed approach.**
+- **New `briefs` table** keyed by `feed_item_id` (one brief per story; latest wins): store the
+  compiled brief (summary + sections, e.g. as JSON or the raw Markdown), the final per-angle
+  outcomes, and a `created_at`. Additive migration, same pattern as the existing tables.
+- **Write on completion** — `run_swarm` persists the brief right before/after emitting
+  `swarm-brief-ready`.
+- **Load on open** — a `get_brief(feed_item_id)` command; `DigDeeperPanel`'s mount effect checks
+  for a saved brief first and, if present, renders it directly (skip planner/workers) instead of
+  calling `startDigDeeper`.
+- **Explicit "Re-run"** button in the brief view to intentionally regenerate (overwrites the
+  saved brief) — so refreshing is a deliberate, visible cost, never accidental.
+- Keep cancellation/degraded behavior unchanged; only a *successful* brief is persisted.
+
+**Acceptance.** Run dig-deeper on a story, close the drawer, reopen it → the previous brief
+appears instantly with **no** new `claude` processes spawned; a "Re-run" action regenerates on
+demand; the brief survives an app restart (persisted in SQLite).
+
+---
+
 _Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / preflight) done
 (Session 5); #2 (lossless ingestion) done (Session 6).** **#4 (sleep/wake catch-up) — WON'T DO**
 (Session 7: monotonic stopwatch scheduling is intentional; wall-clock rewrite + active-time
 persistence both rejected as over-engineering). Phase 3 (tray + native notifications) shipped
 (Session 8). **#5 (surface the notification-denied state) — DESCOPED (Session 9):** unbuildable on
 desktop; `tauri-plugin-notification` never reads real permission state (stub always returns
-`Granted`). The remaining unbuilt **core** requirement is the dig-deeper research swarm (see
-`STATUS.md`) — the highest-value work left._
+`Granted`). The **dig-deeper research swarm — the last core requirement — shipped (Session 14)**
+on `feat/dig-deeper-swarm`, live-verified end-to-end (see `STATUS.md`). All core requirements are
+now complete; remaining items (**#6** topic dedup, **#7** full-history search, **#8** persist
+briefs) are optional enhancements. **Next up: #8 (persist dig-deeper briefs).**_
