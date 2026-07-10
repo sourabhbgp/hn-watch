@@ -426,6 +426,169 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
     Ok(parse_verdict(&text))
 }
 
+/// Compiled research brief — matches the frontend `Brief` (summary + sections). The panel
+/// supplies itemId/angles itself, so the payload only needs these two.
+#[allow(dead_code)] // consumed by Task 6
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Brief {
+    pub summary: String,
+    pub sections: Vec<BriefSection>,
+}
+
+#[allow(dead_code)] // consumed by Task 6
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BriefSection {
+    pub heading: String,
+    pub body: String,
+}
+
+/// Deserialize target for `parse_brief` (Brief is serialize-only for the event).
+#[allow(dead_code)] // consumed by Task 6
+#[derive(serde::Deserialize)]
+struct RawBrief {
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    sections: Vec<BriefSection>,
+}
+
+#[allow(dead_code)] // consumed by Task 6
+pub fn build_investigate_prompt(ctx: &FeedItemContext, angle: &PlannedAngle) -> String {
+    format!(
+        "You are one investigator in a research swarm looking into a single HN story, \
+         focused ONLY on this angle:\n\"{focus}\"\n\n\
+         Story: \"{title}\" ({url})\n\
+         Context: this matched a monitor interested in \"{prompt}\" because: {reason}\n\n\
+         Investigate strictly from your assigned angle — don't try to cover the whole story. \
+         Use web search / fetch to look into the story and related context. Produce a concise \
+         3-6 sentence findings write-up that stands on its own — it will be compiled into a \
+         combined brief.",
+        focus = angle.focus,
+        title = ctx.title,
+        url = ctx.url,
+        prompt = ctx.monitor_prompt,
+        reason = ctx.reason,
+    )
+}
+
+#[allow(dead_code)] // consumed by Task 6
+pub fn build_synthesis_prompt(ctx: &FeedItemContext, results: &[(PlannedAngle, Option<String>)]) -> String {
+    let mut body = String::new();
+    for (angle, output) in results {
+        match output {
+            Some(text) => body.push_str(&format!("\n### {}\n{}\n", angle.label, text)),
+            None => body.push_str(&format!(
+                "\n[Note: the \"{}\" angle could not be completed (timed out or failed).]\n",
+                angle.label
+            )),
+        }
+    }
+    format!(
+        "Compile a combined research brief from {n} investigators who each looked at one HN \
+         story from a different angle.\n\n\
+         Story: \"{title}\" ({url})\n{body}\n\
+         Write: a 2-3 sentence overview, then sections (reuse or reorganize the angle labels as \
+         headings). Return ONLY JSON (no prose, no markdown fences): \
+         {{\"summary\": \"...\", \"sections\": [{{\"heading\": \"...\", \"body\": \"...\"}}]}}",
+        n = results.len(),
+        title = ctx.title,
+        url = ctx.url,
+        body = body,
+    )
+}
+
+/// Parse the synthesis JSON object (tolerant: finds the first `{ … }`). `None` if no object
+/// is found; an object missing keys yields empty defaults.
+#[allow(dead_code)] // consumed by Task 6
+pub fn parse_brief(text: &str) -> Option<Brief> {
+    let slice = match (text.find('{'), text.rfind('}')) {
+        (Some(s), Some(e)) if e > s => &text[s..=e],
+        _ => return None,
+    };
+    let raw: RawBrief = serde_json::from_str(slice).ok()?;
+    Some(Brief { summary: raw.summary, sections: raw.sections })
+}
+
+/// One parsed line of `--output-format stream-json`.
+#[allow(dead_code)] // consumed by Task 6
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamLine {
+    /// A human-readable progress line for the live lane.
+    Progress(String),
+    /// The terminal result event: the authoritative final output for the angle.
+    Final { text: String, is_error: bool },
+    /// system / user / unknown / non-JSON — nothing to show.
+    Ignore,
+}
+
+/// Truncate a progress line so a chatty model can't flood the UI.
+#[allow(dead_code)] // consumed by Task 6
+fn truncate_progress(s: &str) -> String {
+    const MAX: usize = 160;
+    let s = s.trim();
+    if s.chars().count() > MAX {
+        format!("{}…", s.chars().take(MAX).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+/// Map one stream-json line to a `StreamLine`. Never panics on malformed input.
+/// NOTE: field names verified in Task 1 — adjust here if the real CLI differs.
+#[allow(dead_code)] // consumed by Task 6
+pub fn parse_stream_line(line: &str) -> StreamLine {
+    let v: serde_json::Value = match serde_json::from_str(line.trim()) {
+        Ok(v) => v,
+        Err(_) => return StreamLine::Ignore,
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("assistant") => {
+            let blocks = v
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array());
+            if let Some(blocks) = blocks {
+                for b in blocks {
+                    match b.get("type").and_then(|t| t.as_str()) {
+                        Some("text") => {
+                            if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                                if !t.trim().is_empty() {
+                                    return StreamLine::Progress(truncate_progress(t));
+                                }
+                            }
+                        }
+                        Some("tool_use") => {
+                            let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                            // surface the most useful input value (query or url) if present
+                            let detail = b
+                                .get("input")
+                                .and_then(|i| i.get("query").or_else(|| i.get("url")))
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("");
+                            let line = if detail.is_empty() {
+                                format!("⚙ {name}")
+                            } else {
+                                format!("⚙ {name}: {detail}")
+                            };
+                            return StreamLine::Progress(truncate_progress(&line));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            StreamLine::Ignore
+        }
+        Some("result") => {
+            let text = v.get("result").and_then(|r| r.as_str()).unwrap_or("").to_string();
+            let is_error = v.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false);
+            StreamLine::Final { text, is_error }
+        }
+        _ => StreamLine::Ignore,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,5 +773,70 @@ mod tests {
         // distinct icons for the first 4
         assert_eq!(a[0].icon, ANGLE_ICONS[0]);
         assert_eq!(a[3].icon, ANGLE_ICONS[3]);
+    }
+
+    fn sample_angle() -> PlannedAngle {
+        angle_at(0, "Funding".into(), "the funding round and investors".into())
+    }
+
+    #[test]
+    fn build_investigate_prompt_contains_focus_and_story() {
+        let p = build_investigate_prompt(&ctx(), &sample_angle());
+        assert!(p.contains("the funding round and investors")); // focus
+        assert!(p.contains("Orbital (YC W26) files your taxes")); // title
+        assert!(p.contains("AI-agent startup launches")); // monitor interest
+    }
+
+    #[test]
+    fn build_synthesis_prompt_notes_failures() {
+        let results = vec![
+            (sample_angle(), Some("Raised $4M seed.".to_string())),
+            (angle_at(1, "Market".into(), "rivals".into()), None), // failed
+        ];
+        let p = build_synthesis_prompt(&ctx(), &results);
+        assert!(p.contains("Raised $4M seed.")); // succeeded angle's output
+        assert!(p.contains("Funding")); // its label as a heading
+        assert!(p.contains("could not be completed")); // the failure note
+    }
+
+    #[test]
+    fn parse_brief_reads_summary_and_sections() {
+        let text = r#"Sure:
+        {"summary":"A tax agent.","sections":[{"heading":"What","body":"It files taxes."}]}"#;
+        let b = parse_brief(text).expect("parses");
+        assert_eq!(b.summary, "A tax agent.");
+        assert_eq!(b.sections.len(), 1);
+        assert_eq!(b.sections[0].heading, "What");
+    }
+
+    #[test]
+    fn parse_brief_garbage_is_none() {
+        assert!(parse_brief("no json").is_none());
+        assert!(parse_brief("{}").map(|b| b.summary).unwrap_or_default().is_empty());
+    }
+
+    #[test]
+    fn parse_stream_line_classifies() {
+        // assistant text block -> Progress
+        let text = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Looking into funding"}]}}"#;
+        assert_eq!(parse_stream_line(text), StreamLine::Progress("Looking into funding".into()));
+
+        // tool_use -> Progress with a tool label
+        let tool = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"WebSearch","input":{"query":"orbital yc"}}]}}"#;
+        match parse_stream_line(tool) {
+            StreamLine::Progress(s) => assert!(s.contains("WebSearch")),
+            other => panic!("expected Progress, got {other:?}"),
+        }
+
+        // result -> Final
+        let result = r#"{"type":"result","subtype":"success","is_error":false,"result":"Final findings."}"#;
+        assert_eq!(
+            parse_stream_line(result),
+            StreamLine::Final { text: "Final findings.".into(), is_error: false }
+        );
+
+        // system + non-json -> Ignore
+        assert_eq!(parse_stream_line(r#"{"type":"system","subtype":"init"}"#), StreamLine::Ignore);
+        assert_eq!(parse_stream_line("not json"), StreamLine::Ignore);
     }
 }
