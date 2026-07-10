@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Monitor, FeedItem, ClaudeHealth } from "./types";
+import type { Monitor, FeedItem, ClaudeHealth, PlannedAngle, BriefSection } from "./types";
 
 export const listMonitors = () => invoke<Monitor[]>("list_monitors");
 export const listFeed = () => invoke<FeedItem[]>("list_feed");
@@ -37,3 +37,39 @@ export const recheckClaude = () => invoke<ClaudeHealth>("recheck_claude");
 // Fires when Claude health changes (preflight, recheck, or a tick flip).
 export const onClaudeHealth = (cb: (h: ClaudeHealth) => void) =>
   listen<ClaudeHealth>("claude-health", (e) => cb(e.payload));
+
+// --- Dig-deeper research swarm ---
+
+// Run the planner for a feed item; returns the proposed (editable) angles.
+export const startDigDeeper = (itemId: string) =>
+  invoke<PlannedAngle[]>("start_dig_deeper", { itemId });
+
+// Confirm the edited angle list and start the swarm.
+export const confirmDigDeeper = (itemId: string, angles: PlannedAngle[]) =>
+  invoke<void>("confirm_dig_deeper", { itemId, angles });
+
+// Cancel a running swarm (panel closed / item switched).
+export const cancelDigDeeper = (itemId: string) =>
+  invoke<void>("cancel_dig_deeper", { itemId });
+
+export interface SwarmProgress { itemId: string; angleId: string; line: string }
+export interface SwarmAngleDone {
+  itemId: string;
+  angleId: string;
+  output: string | null;
+  error: string | null;
+}
+export interface SwarmBriefReady {
+  itemId: string;
+  brief: { summary: string; sections: BriefSection[] };
+}
+export interface SwarmFailed { itemId: string; error: string }
+
+export const onSwarmProgress = (cb: (p: SwarmProgress) => void) =>
+  listen<SwarmProgress>("swarm-progress", (e) => cb(e.payload));
+export const onSwarmAngleDone = (cb: (p: SwarmAngleDone) => void) =>
+  listen<SwarmAngleDone>("swarm-angle-done", (e) => cb(e.payload));
+export const onSwarmBriefReady = (cb: (p: SwarmBriefReady) => void) =>
+  listen<SwarmBriefReady>("swarm-brief-ready", (e) => cb(e.payload));
+export const onSwarmFailed = (cb: (p: SwarmFailed) => void) =>
+  listen<SwarmFailed>("swarm-failed", (e) => cb(e.payload));

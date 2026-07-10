@@ -4,6 +4,7 @@ const STATUS_STYLE: Record<AngleStatus, { chip: string; label: string }> = {
   queued: { chip: "bg-paper text-faint", label: "queued" },
   running: { chip: "bg-hn-soft text-rust", label: "running" },
   done: { chip: "bg-[#eaf3ea] text-ok", label: "done" },
+  error: { chip: "bg-hn-soft text-rust", label: "error" },
 };
 
 function AngleLane({ angle }: { angle: SwarmAngle }) {

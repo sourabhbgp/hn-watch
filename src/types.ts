@@ -36,7 +36,7 @@ export interface FeedItem {
   timeAgo: string;
 }
 
-export type AngleStatus = "queued" | "running" | "done";
+export type AngleStatus = "queued" | "running" | "done" | "error";
 
 export interface SwarmAngle {
   id: string;
@@ -44,6 +44,14 @@ export interface SwarmAngle {
   label: string;
   status: AngleStatus;
   lines: string[]; // streamed progress lines from the agent
+  error?: string; // failure reason when status === "error"
+}
+
+export interface PlannedAngle {
+  id: string;
+  icon: string;
+  label: string;
+  focus: string;
 }
 
 export interface BriefSection {
