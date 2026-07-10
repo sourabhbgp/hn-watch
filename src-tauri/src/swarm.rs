@@ -8,12 +8,10 @@ use tokio::task::JoinSet;
 
 /// Tracks the currently-running dig-deeper orchestration per feed item, so a panel close
 /// (or switching items) can abort it. Mirrors `Scheduler.handles`.
-#[allow(dead_code)] // consumed by Task 8 (commands)
 pub struct SwarmRegistry {
     handles: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
-#[allow(dead_code)] // consumed by Task 8 (commands)
 impl SwarmRegistry {
     pub fn new() -> Self {
         SwarmRegistry { handles: Mutex::new(HashMap::new()) }
@@ -45,7 +43,6 @@ impl Default for SwarmRegistry {
 
 // ---- event payloads (camelCase, mirroring the tick events) ----
 
-#[allow(dead_code)] // consumed by Task 8 (commands)
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SwarmProgress {
@@ -54,7 +51,6 @@ struct SwarmProgress {
     line: String,
 }
 
-#[allow(dead_code)] // consumed by Task 8 (commands)
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SwarmAngleDone {
@@ -64,7 +60,6 @@ struct SwarmAngleDone {
     error: Option<String>,
 }
 
-#[allow(dead_code)] // consumed by Task 8 (commands)
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SwarmBriefReady {
@@ -72,7 +67,6 @@ struct SwarmBriefReady {
     brief: Brief,
 }
 
-#[allow(dead_code)] // consumed by Task 8 (commands)
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SwarmFailed {
@@ -84,7 +78,6 @@ struct SwarmFailed {
 /// orchestration task and registers it for cancellation. The task: loads the item context,
 /// fans out one streaming worker per angle (all start at once — SWARM_PERMITS == MAX_ANGLES),
 /// forwards progress, joins, then synthesizes and emits the brief. All angles failing → `swarm-failed`.
-#[allow(dead_code)] // consumed by Task 8 (commands)
 pub fn run_swarm(
     app: AppHandle,
     db: Arc<Mutex<Connection>>,

@@ -16,11 +16,8 @@ pub const TICK_PERMITS: usize = 2;
 pub const SWARM_PERMITS: usize = 5;
 
 /// Per-call timeouts for the swarm's three phases.
-#[allow(dead_code)] // consumed by Task 8 (commands)
 const PLAN_TIMEOUT_SECS: u64 = 45;
-#[allow(dead_code)] // consumed by Task 8 (commands)
 const ANGLE_TIMEOUT_SECS: u64 = 150;
-#[allow(dead_code)] // consumed by Task 8 (commands)
 const SYNTHESIS_TIMEOUT_SECS: u64 = 90;
 
 fn tick_sem() -> &'static Semaphore {
@@ -28,7 +25,6 @@ fn tick_sem() -> &'static Semaphore {
     SEM.get_or_init(|| Semaphore::new(TICK_PERMITS))
 }
 
-#[allow(dead_code)]
 fn swarm_sem() -> &'static Semaphore {
     static SEM: OnceLock<Semaphore> = OnceLock::new();
     SEM.get_or_init(|| Semaphore::new(SWARM_PERMITS))
@@ -158,16 +154,12 @@ pub fn parse_verdict(text: &str) -> Vec<Verdict> {
 }
 
 /// Number of investigative angles a swarm may run — enforced client- and server-side.
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 pub const MIN_ANGLES: usize = 2;
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 pub const MAX_ANGLES: usize = 5;
 /// Icon pool, assigned to angles by index (the LLM never emits an emoji).
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 pub const ANGLE_ICONS: [&str; 5] = ["🏢", "🔧", "📊", "🕵️", "🧭"];
 
 /// One investigative angle: what a single swarm worker will look into.
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlannedAngle {
@@ -178,7 +170,6 @@ pub struct PlannedAngle {
 }
 
 /// Raw planner output before clamping/icon assignment.
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 #[derive(serde::Deserialize)]
 struct RawAngle {
     #[serde(default)]
@@ -189,7 +180,6 @@ struct RawAngle {
 
 /// Build a `PlannedAngle` from a label+focus, assigning the icon at `index` (mod pool size)
 /// and a fresh uuid.
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 fn angle_at(index: usize, label: String, focus: String) -> PlannedAngle {
     PlannedAngle {
         id: Uuid::new_v4().to_string(),
@@ -200,7 +190,6 @@ fn angle_at(index: usize, label: String, focus: String) -> PlannedAngle {
 }
 
 /// Fallback angle set when the planner fails or returns too few usable angles.
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 pub fn default_angles() -> Vec<PlannedAngle> {
     [
         ("Company & people", "Who is behind the story — founders, team, backers, org."),
@@ -214,7 +203,6 @@ pub fn default_angles() -> Vec<PlannedAngle> {
     .collect()
 }
 
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 pub fn build_plan_prompt(ctx: &FeedItemContext) -> String {
     format!(
         "You are planning a research swarm to dig deeper into one Hacker News story, \
@@ -241,7 +229,6 @@ pub fn build_plan_prompt(ctx: &FeedItemContext) -> String {
 /// `parse_verdict` (finds the first `[ … ]`). Drops entries with an empty label/focus;
 /// if fewer than `MIN_ANGLES` survive (or the text is unparseable), returns `default_angles()`;
 /// truncates to `MAX_ANGLES`.
-#[allow(dead_code)] // consumed by Task 6 (plan_angles)
 pub fn parse_plan(text: &str) -> Vec<PlannedAngle> {
     let slice = match (text.find('['), text.rfind(']')) {
         (Some(s), Some(e)) if e > s => &text[s..=e],
@@ -437,7 +424,6 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
 
 /// Run one buffered swarm `claude -p` call (planner / synthesis). Acquires a `swarm_sem`
 /// permit, applies `timeout_secs`, and classifies failures like `judge()`.
-#[allow(dead_code)] // consumed by Task 8 (commands)
 async fn run_buffered_swarm(prompt: &str, timeout_secs: u64) -> Result<String, AgentError> {
     let _permit = swarm_sem()
         .acquire()
@@ -476,7 +462,6 @@ async fn run_buffered_swarm(prompt: &str, timeout_secs: u64) -> Result<String, A
 /// Plan the investigative angles for a story. Never errors: any failure (missing/logged-out
 /// claude, timeout, garbage output) resolves to `default_angles()` so the confirm UI always
 /// has a proposal to show.
-#[allow(dead_code)] // consumed by Task 8 (commands)
 pub async fn plan_angles(ctx: &FeedItemContext) -> Vec<PlannedAngle> {
     match run_buffered_swarm(&build_plan_prompt(ctx), PLAN_TIMEOUT_SECS).await {
         Ok(text) => parse_plan(&text),
@@ -485,7 +470,6 @@ pub async fn plan_angles(ctx: &FeedItemContext) -> Vec<PlannedAngle> {
 }
 
 /// Compile the combined brief from the per-angle results (`Some` = output, `None` = failed).
-#[allow(dead_code)] // consumed by Task 8 (commands)
 pub async fn synthesize(
     ctx: &FeedItemContext,
     results: &[(PlannedAngle, Option<String>)],
@@ -501,7 +485,6 @@ pub async fn synthesize(
 ///
 /// NOTE (Task 1): if web tools are unavailable in headless `-p`, drop the two `--allowedTools`
 /// args to run closed-book — the rest is unchanged.
-#[allow(dead_code)] // consumed by Task 8 (commands)
 pub async fn stream_investigate(
     ctx: &FeedItemContext,
     angle: &PlannedAngle,
@@ -568,7 +551,6 @@ pub async fn stream_investigate(
 
 /// Compiled research brief — matches the frontend `Brief` (summary + sections). The panel
 /// supplies itemId/angles itself, so the payload only needs these two.
-#[allow(dead_code)] // consumed by Task 6
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Brief {
@@ -576,7 +558,6 @@ pub struct Brief {
     pub sections: Vec<BriefSection>,
 }
 
-#[allow(dead_code)] // consumed by Task 6
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BriefSection {
@@ -585,7 +566,6 @@ pub struct BriefSection {
 }
 
 /// Deserialize target for `parse_brief` (Brief is serialize-only for the event).
-#[allow(dead_code)] // consumed by Task 6
 #[derive(serde::Deserialize)]
 struct RawBrief {
     #[serde(default)]
@@ -594,7 +574,6 @@ struct RawBrief {
     sections: Vec<BriefSection>,
 }
 
-#[allow(dead_code)] // consumed by Task 6
 pub fn build_investigate_prompt(ctx: &FeedItemContext, angle: &PlannedAngle) -> String {
     format!(
         "You are one investigator in a research swarm looking into a single HN story, \
@@ -613,7 +592,6 @@ pub fn build_investigate_prompt(ctx: &FeedItemContext, angle: &PlannedAngle) -> 
     )
 }
 
-#[allow(dead_code)] // consumed by Task 6
 pub fn build_synthesis_prompt(ctx: &FeedItemContext, results: &[(PlannedAngle, Option<String>)]) -> String {
     let mut body = String::new();
     for (angle, output) in results {
@@ -641,7 +619,6 @@ pub fn build_synthesis_prompt(ctx: &FeedItemContext, results: &[(PlannedAngle, O
 
 /// Parse the synthesis JSON object (tolerant: finds the first `{ … }`). `None` if no object
 /// is found; an object missing keys yields empty defaults.
-#[allow(dead_code)] // consumed by Task 6
 pub fn parse_brief(text: &str) -> Option<Brief> {
     let slice = match (text.find('{'), text.rfind('}')) {
         (Some(s), Some(e)) if e > s => &text[s..=e],
@@ -652,7 +629,6 @@ pub fn parse_brief(text: &str) -> Option<Brief> {
 }
 
 /// One parsed line of `--output-format stream-json`.
-#[allow(dead_code)] // consumed by Task 6
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamLine {
     /// A human-readable progress line for the live lane.
@@ -664,7 +640,6 @@ pub enum StreamLine {
 }
 
 /// Truncate a progress line so a chatty model can't flood the UI.
-#[allow(dead_code)] // consumed by Task 6
 fn truncate_progress(s: &str) -> String {
     const MAX: usize = 160;
     let s = s.trim();
@@ -677,7 +652,6 @@ fn truncate_progress(s: &str) -> String {
 
 /// Map one stream-json line to a `StreamLine`. Never panics on malformed input.
 /// NOTE: field names verified in Task 1 — adjust here if the real CLI differs.
-#[allow(dead_code)] // consumed by Task 6
 pub fn parse_stream_line(line: &str) -> StreamLine {
     let v: serde_json::Value = match serde_json::from_str(line.trim()) {
         Ok(v) => v,

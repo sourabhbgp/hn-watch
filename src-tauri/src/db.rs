@@ -32,7 +32,6 @@ pub struct FeedRow {
 
 /// Everything the dig-deeper swarm needs about one feed item: the story fields plus
 /// the owning monitor's prompt (so workers know what the user cares about).
-#[allow(dead_code)] // consumed by a later dig-deeper task (planner/worker/synthesis)
 #[derive(Debug, Clone)]
 pub struct FeedItemContext {
     pub title: String,
@@ -182,7 +181,6 @@ pub fn list_feed(conn: &Connection) -> rusqlite::Result<Vec<(FeedRow, String)>> 
 }
 
 /// Load one feed item + its monitor's prompt by feed-item id. `None` if the id is unknown.
-#[allow(dead_code)] // consumed by a later dig-deeper task (planner/worker/synthesis)
 pub fn get_feed_item(conn: &Connection, id: &str) -> rusqlite::Result<Option<FeedItemContext>> {
     let mut stmt = conn.prepare(
         "SELECT f.title, f.url, f.domain, f.summary, f.reason, m.prompt
