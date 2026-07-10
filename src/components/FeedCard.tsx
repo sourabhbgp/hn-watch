@@ -1,6 +1,10 @@
+import { memo } from "react";
 import type { FeedItem } from "../types";
 
-export function FeedCard({
+// Memoized: in a virtualized list the parent re-renders on every scroll frame
+// and on each per-tick feed refresh. `item` is stable by id and `onDigDeeper`
+// is a stable state setter, so memo lets unchanged cards skip re-rendering.
+export const FeedCard = memo(function FeedCard({
   item,
   onDigDeeper,
 }: {
@@ -52,4 +56,4 @@ export function FeedCard({
       </div>
     </article>
   );
-}
+});
