@@ -278,7 +278,13 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
         .map_err(|e| AgentError::Failed(format!("semaphore closed: {e}")))?;
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(90),
-        claude_command().arg("-p").arg("--safe-mode").arg(&prompt).output(),
+        claude_command()
+            .arg("-p")
+            .arg("--safe-mode")
+            .arg("--model")
+            .arg("claude-sonnet-5")
+            .arg(&prompt)
+            .output(),
     )
     .await
     .map_err(|_| AgentError::Timeout)?

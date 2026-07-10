@@ -375,6 +375,21 @@ Rust, no schema, no new dependency.
       computer-use launcher always opens the *release* `.app`, so a stale Session-10 debug bundle
       masked the branch until a fresh `tauri build` — always rebuild before driving.
 
+## Session 12 — Pin the tick model to Sonnet 5 (`feat/pin-sonnet-5-model`)
+
+**Done** — the per-tick `claude -p` filter agent now runs on a **known** model instead of
+whatever the CLI default happens to be on the host.
+
+- [x] **Pinned model** — `judge()` (`src-tauri/src/agent.rs`) now passes `--model claude-sonnet-5`
+      to `claude -p --safe-mode`. Previously no `--model` flag was set, so each tick used the host's
+      default Claude Code model (unspecified, could drift per machine/account).
+- [x] **Verified** — smoke-tested the CLI accepts `--model claude-sonnet-5` (`claude -p … → OK`,
+      exit 0); ran the exact judge-prompt shape the code builds and confirmed Sonnet 5 returns a
+      clean JSON array with the right keys, correctly filtering matches (kept the on-topic story,
+      dropped the off-topic one) — i.e. `parse_verdict` will parse it. `cargo build` clean.
+- [x] **Note:** this hardcodes the version. To always track the newest Sonnet instead, use the
+      `sonnet` alias; kept the explicit `claude-sonnet-5` per request.
+
 ## How to run
 
 ```bash
