@@ -44,7 +44,6 @@ pub struct FeedItemContext {
 
 /// One angle as persisted in a saved research run. `findings` set when `status == "done"`,
 /// `error` set (with the reason) when `status == "failed"`.
-#[allow(dead_code)] // consumed by Task 2/3
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedAngle {
@@ -237,7 +236,6 @@ pub fn get_feed_item(conn: &Connection, id: &str) -> rusqlite::Result<Option<Fee
 
 /// Upsert the completed research for a feed item (latest-wins). `sections`/`angles`
 /// are stored as JSON. Called only after a successful synthesis — never on run start.
-#[allow(dead_code)] // consumed by Task 2/3
 pub fn save_research(
     conn: &Connection,
     feed_item_id: &str,

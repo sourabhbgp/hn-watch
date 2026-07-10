@@ -140,7 +140,8 @@ pub fn run_swarm(
         // Fan out: one worker task per angle, all concurrent. A `JoinSet` (not detached
         // handles) is what makes cancel cascade — dropping this `set` when the orchestration
         // task is aborted aborts every still-running worker.
-        let mut set: JoinSet<(PlannedAngle, Option<String>)> = JoinSet::new();
+        // Result carries the error text (not just None) so a saved run can show why an angle failed.
+        let mut set: JoinSet<(PlannedAngle, Result<String, String>)> = JoinSet::new();
         for angle in angles {
             let app = app.clone();
             let ctx = Arc::clone(&ctx);
@@ -179,12 +180,12 @@ pub fn run_swarm(
                         });
                     }
                 }
-                (angle, result.ok())
+                (angle, result.map_err(|e| e.message()))
             });
         }
 
         // Join all workers (they run concurrently; this just gathers results).
-        let mut results: Vec<(PlannedAngle, Option<String>)> = Vec::new();
+        let mut results: Vec<(PlannedAngle, Result<String, String>)> = Vec::new();
         while let Some(res) = set.join_next().await {
             if let Ok(pair) = res {
                 results.push(pair);
@@ -192,13 +193,34 @@ pub fn run_swarm(
         }
 
         // Degraded-vs-failed: if every angle failed, don't synthesize from nothing.
-        if results.iter().all(|(_, out)| out.is_none()) {
+        if results.iter().all(|(_, out)| out.is_err()) {
             let _ = app.emit("swarm-failed", SwarmFailed { item_id: item_id.clone(), error: "all research angles failed".into() });
             return;
         }
 
-        match agent::synthesize(&ctx, &results).await {
+        // synthesize still consumes Option<String> findings.
+        let synth_input: Vec<(PlannedAngle, Option<String>)> = results
+            .iter()
+            .map(|(a, r)| (a.clone(), r.clone().ok()))
+            .collect();
+        match agent::synthesize(&ctx, &synth_input).await {
             Ok(brief) => {
+                // Persist the completed run (latest-wins) so a reopen shows it without re-running.
+                let saved: Vec<db::SavedAngle> = results
+                    .iter()
+                    .map(|(a, r)| db::SavedAngle {
+                        id: a.id.clone(),
+                        icon: a.icon.clone(),
+                        label: a.label.clone(),
+                        focus: a.focus.clone(),
+                        status: if r.is_ok() { "done".into() } else { "failed".into() },
+                        findings: r.clone().ok(),
+                        error: r.clone().err(),
+                    })
+                    .collect();
+                if let Ok(conn) = db.lock() {
+                    let _ = db::save_research(&conn, &item_id, &brief, &saved, crate::tick::now_secs());
+                }
                 let _ = app.emit("swarm-brief-ready", SwarmBriefReady { item_id, brief });
             }
             Err(e) => {
