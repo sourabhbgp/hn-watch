@@ -363,7 +363,9 @@ persistence both rejected as over-engineering). Phase 3 (tray + native notificat
 (Session 8). **#5 (surface the notification-denied state) — DESCOPED (Session 9):** unbuildable on
 desktop; `tauri-plugin-notification` never reads real permission state (stub always returns
 `Granted`). The **dig-deeper research swarm — the last core requirement — shipped (Session 14)**
-on `feat/dig-deeper-swarm`, live-verified end-to-end (see `STATUS.md`). All core requirements are
-now complete; remaining items (**#6** topic dedup, **#7** full-history search, **#8** persist
-dig-deeper research) are optional enhancements. **Next up: #8 (persist dig-deeper research —
-reopen the full prior investigation, or dig again).**_
+on `feat/dig-deeper-swarm`, live-verified end-to-end (see `STATUS.md`); **Session 15** then made
+the **planning phase cancellable** (`feat/cancellable-planning`) so closing the panel stops the
+planner too, not just the workers. All core requirements are now complete; remaining items
+(**#6** topic dedup, **#7** full-history search, **#8** persist dig-deeper research) are optional
+enhancements. **Next up: #8 (persist dig-deeper research — reopen the full prior investigation,
+or dig again).**_
