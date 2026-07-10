@@ -337,6 +337,44 @@ at once (unbounded, ~500 and climbing) and re-fetched/re-rendered the whole list
       `1200 matches`, and the mounted `<article>` count held at **9 (top) → 16 (deep scroll)** — the DOM is
       windowed, not full. Debug line removed before finalizing. `tsc`/`vite build` clean, `cargo test` 37/37.
 
+## Session 11 — Feed search + matched-term highlighting (`feat/feed-search`)
+
+**Done** — you can now find a topic in the feed instead of scrolling it by eye. Frontend-only; no
+Rust, no schema, no new dependency.
+
+- [x] **Client-side search** — a `Search this feed…` box in the feed header filters the visible
+      cards **live** as you type. Matches **title + AI summary + reason**, case-insensitive,
+      multi-word **AND** (every whitespace-separated term must appear). Pure `matchesQuery`
+      (`src/lib/search.ts`, with a shared `parseTerms`); the feed array is already in memory, so
+      search is one more `useMemo` filter composed **on top of** the existing monitor filter — with
+      a monitor selected it searches only that monitor's matches; on "All matches" it searches
+      everything loaded. The query **clears when the monitor selection changes** so each view starts
+      fresh.
+- [x] **`X of Y` count + clear + empty state** — the header count reads `12 of 340 matches` while a
+      query is active (falling back to the plain `N matches` otherwise); a `×` clears the box and
+      restores the full feed; a query with no hits shows `No matches for "…"`.
+- [x] **Matched-term highlighting** (added mid-session at user request; was originally a non-goal) —
+      every matched term in a card's title, summary, and reason is wrapped in a `<mark>` with a
+      subtle on-brand orange (`bg-hn-soft` token), so you can see *why* a card matched. Pure
+      `highlight` helper (`src/lib/highlight.tsx`): case-insensitive, multi-term via one alternation
+      regex, regex-metachars escaped (so a term like `c++` can't throw), empty query is a no-op.
+      `FeedCard` gained a `query` prop; `React.memo` still skips unchanged cards while scrolling.
+- [x] **Known limit (documented):** search covers the **newest 1000** items the backend ships
+      (`db::list_feed LIMIT 1000`), not the full history — the same recency cap the feed already
+      uses. Full-history backend (FTS5) search is filed as **TODO #7**, not built here.
+- [x] Built via subagent-driven development: spec
+      (`docs/superpowers/specs/2026-07-10-feed-search-design.md`) → plan
+      (`docs/superpowers/plans/2026-07-10-feed-search.md`) → 4 implementer units (matcher → wiring →
+      *(live verify)* → highlighting) each task-reviewed clean, then a whole-branch review.
+- [x] **Verified live in the native window** (release build driven with computer-use): search box
+      renders; typing `agents` → `250 of 1000` and the term highlighted orange in titles;
+      case-insensitive (lowercase query matched capitalized text); with **Load Test** selected,
+      `monitored` → scoped `499 of 998` with the term highlighted in the reason boxes; `×` restores
+      the full feed; switching monitors clears the query; a nonsense query → `No matches for "…"`.
+      `tsc`/`vite build` clean, `cargo test` untouched (no Rust changed). **Gotcha logged:** the
+      computer-use launcher always opens the *release* `.app`, so a stale Session-10 debug bundle
+      masked the branch until a fresh `tauri build` — always rebuild before driving.
+
 ## How to run
 
 ```bash
