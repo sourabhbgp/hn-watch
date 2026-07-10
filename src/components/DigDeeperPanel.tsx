@@ -241,7 +241,7 @@ export function DigDeeperPanel({ item, onClose }: { item: FeedItem; onClose: () 
                       {brief.sections.map((sec) => (
                         <div key={sec.heading}>
                           <h3 className="text-[12.5px] font-bold text-ink">{sec.heading}</h3>
-                          <p className="mt-0.5 text-[12.5px] leading-relaxed text-soft">
+                          <p className="mt-0.5 whitespace-pre-wrap text-[12.5px] leading-relaxed text-soft">
                             {sec.body}
                           </p>
                         </div>

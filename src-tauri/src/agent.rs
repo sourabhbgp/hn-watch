@@ -565,15 +565,6 @@ pub struct BriefSection {
     pub body: String,
 }
 
-/// Deserialize target for `parse_brief` (Brief is serialize-only for the event).
-#[derive(serde::Deserialize)]
-struct RawBrief {
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    sections: Vec<BriefSection>,
-}
-
 pub fn build_investigate_prompt(ctx: &FeedItemContext, angle: &PlannedAngle) -> String {
     format!(
         "You are one investigator in a research swarm looking into a single HN story, \
@@ -607,9 +598,10 @@ pub fn build_synthesis_prompt(ctx: &FeedItemContext, results: &[(PlannedAngle, O
         "Compile a combined research brief from {n} investigators who each looked at one HN \
          story from a different angle.\n\n\
          Story: \"{title}\" ({url})\n{body}\n\
-         Write: a 2-3 sentence overview, then sections (reuse or reorganize the angle labels as \
-         headings). Return ONLY JSON (no prose, no markdown fences): \
-         {{\"summary\": \"...\", \"sections\": [{{\"heading\": \"...\", \"body\": \"...\"}}]}}",
+         Respond with ONLY the brief itself as Markdown — no preamble, no meta-commentary, no \
+         code fences, and do not restate this instruction. Begin directly with a 2-3 sentence \
+         overview paragraph (no heading above it), then one `## Heading` section per angle \
+         (reuse or reorganize the angle labels as headings) with a short body under each.",
         n = results.len(),
         title = ctx.title,
         url = ctx.url,
@@ -617,15 +609,52 @@ pub fn build_synthesis_prompt(ctx: &FeedItemContext, results: &[(PlannedAngle, O
     )
 }
 
-/// Parse the synthesis JSON object (tolerant: finds the first `{ … }`). `None` if no object
-/// is found; an object missing keys yields empty defaults.
+/// Parse the synthesis Markdown into a `Brief`. The overview (everything before the first
+/// `#`-heading) becomes `summary`; each heading line starts a section whose body runs to the
+/// next heading. Unlike a strict JSON parse, this tolerates raw line breaks, bullets, and a
+/// truncated tail — a cut-off brief still yields every section that completed. Returns `None`
+/// only when the text is empty (a genuine synthesis failure).
 pub fn parse_brief(text: &str) -> Option<Brief> {
-    let slice = match (text.find('{'), text.rfind('}')) {
-        (Some(s), Some(e)) if e > s => &text[s..=e],
-        _ => return None,
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    // A Markdown heading line: one or more leading `#` followed by a space.
+    let heading_of = |line: &str| -> Option<String> {
+        let t = line.trim_start();
+        let rest = t.trim_start_matches('#');
+        if rest.len() < t.len() && rest.starts_with(' ') {
+            Some(rest.trim().to_string())
+        } else {
+            None
+        }
     };
-    let raw: RawBrief = serde_json::from_str(slice).ok()?;
-    Some(Brief { summary: raw.summary, sections: raw.sections })
+
+    let mut summary = String::new();
+    let mut sections: Vec<BriefSection> = Vec::new();
+    let mut current: Option<BriefSection> = None;
+
+    for line in text.lines() {
+        if let Some(heading) = heading_of(line) {
+            if let Some(sec) = current.take() {
+                sections.push(sec);
+            }
+            current = Some(BriefSection { heading, body: String::new() });
+        } else if let Some(sec) = current.as_mut() {
+            sec.body.push_str(line);
+            sec.body.push('\n');
+        } else {
+            summary.push_str(line);
+            summary.push('\n');
+        }
+    }
+    if let Some(sec) = current.take() {
+        sections.push(sec);
+    }
+    for sec in sections.iter_mut() {
+        sec.body = sec.body.trim().to_string();
+    }
+    Some(Brief { summary: summary.trim().to_string(), sections })
 }
 
 /// One parsed line of `--output-format stream-json`.
@@ -915,18 +944,38 @@ mod tests {
 
     #[test]
     fn parse_brief_reads_summary_and_sections() {
-        let text = r#"Sure:
-        {"summary":"A tax agent.","sections":[{"heading":"What","body":"It files taxes."}]}"#;
+        let text = "A tax agent that files your taxes.\n\n## What\nIt files taxes.\n\n## Why\nSaves time.";
         let b = parse_brief(text).expect("parses");
-        assert_eq!(b.summary, "A tax agent.");
-        assert_eq!(b.sections.len(), 1);
+        assert_eq!(b.summary, "A tax agent that files your taxes.");
+        assert_eq!(b.sections.len(), 2);
         assert_eq!(b.sections[0].heading, "What");
+        assert_eq!(b.sections[0].body, "It files taxes.");
+        assert_eq!(b.sections[1].heading, "Why");
     }
 
     #[test]
-    fn parse_brief_garbage_is_none() {
-        assert!(parse_brief("no json").is_none());
-        assert!(parse_brief("{}").map(|b| b.summary).unwrap_or_default().is_empty());
+    fn parse_brief_tolerates_multiline_bodies() {
+        // Regression: the live failure was a strict JSON parse choking on raw line breaks and
+        // bullets inside a prose body. Markdown parsing must keep them verbatim.
+        let text = "Overview.\n\n## Details\nLine one.\nLine two.\n\n- bullet a\n- bullet b";
+        let b = parse_brief(text).expect("parses");
+        assert_eq!(b.summary, "Overview.");
+        assert_eq!(b.sections.len(), 1);
+        assert!(b.sections[0].body.contains("Line one.\nLine two."));
+        assert!(b.sections[0].body.contains("- bullet a"));
+    }
+
+    #[test]
+    fn parse_brief_no_headings_is_summary_only() {
+        let b = parse_brief("Just a paragraph, no sections.").expect("parses");
+        assert_eq!(b.summary, "Just a paragraph, no sections.");
+        assert!(b.sections.is_empty());
+    }
+
+    #[test]
+    fn parse_brief_empty_is_none() {
+        assert!(parse_brief("").is_none());
+        assert!(parse_brief("   \n  \t ").is_none());
     }
 
     #[test]
