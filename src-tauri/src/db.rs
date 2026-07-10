@@ -30,6 +30,19 @@ pub struct FeedRow {
     pub created_at: i64,
 }
 
+/// Everything the dig-deeper swarm needs about one feed item: the story fields plus
+/// the owning monitor's prompt (so workers know what the user cares about).
+#[allow(dead_code)] // consumed by a later dig-deeper task (planner/worker/synthesis)
+#[derive(Debug, Clone)]
+pub struct FeedItemContext {
+    pub title: String,
+    pub url: String,
+    pub domain: String,
+    pub summary: String,
+    pub reason: String,
+    pub monitor_prompt: String,
+}
+
 /// Add `column` to `table` only if it isn't already present. SQLite has no
 /// `ADD COLUMN IF NOT EXISTS`, and existing on-disk DBs must upgrade safely.
 /// table/column/decl are static literals here (never user input).
@@ -166,6 +179,30 @@ pub fn list_feed(conn: &Connection) -> rusqlite::Result<Vec<(FeedRow, String)>> 
         ))
     })?;
     rows.collect()
+}
+
+/// Load one feed item + its monitor's prompt by feed-item id. `None` if the id is unknown.
+#[allow(dead_code)] // consumed by a later dig-deeper task (planner/worker/synthesis)
+pub fn get_feed_item(conn: &Connection, id: &str) -> rusqlite::Result<Option<FeedItemContext>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.title, f.url, f.domain, f.summary, f.reason, m.prompt
+         FROM feed_items f JOIN monitors m ON m.id = f.monitor_id
+         WHERE f.id = ?1",
+    )?;
+    let mut rows = stmt.query_map([id], |r| {
+        Ok(FeedItemContext {
+            title: r.get(0)?,
+            url: r.get(1)?,
+            domain: r.get(2)?,
+            summary: r.get(3)?,
+            reason: r.get(4)?,
+            monitor_prompt: r.get(5)?,
+        })
+    })?;
+    match rows.next() {
+        Some(row) => Ok(Some(row?)),
+        None => Ok(None),
+    }
 }
 
 pub fn count_matches(conn: &Connection, monitor_id: &str) -> rusqlite::Result<i64> {
@@ -386,5 +423,26 @@ mod tests {
         record_tick(&c, "m1", 5, 1, Some("boom"), 200).unwrap();
         let m = list_monitors(&c).unwrap().pop().unwrap();
         assert_eq!(m.last_error, Some("boom".into()));
+    }
+
+    #[test]
+    fn get_feed_item_joins_monitor_prompt() {
+        let c = mem();
+        insert_monitor(&c, &sample_monitor("m1")).unwrap(); // prompt = "ai agents"
+        insert_feed_item(&c, &FeedRow {
+            id: "f1".into(), monitor_id: "m1".into(), hn_id: "hn1".into(),
+            title: "Orbital launches".into(), url: "https://x.dev/a".into(), domain: "x.dev".into(),
+            summary: "an agent".into(), reason: "matches".into(),
+            hn_score: 10, hn_comments: 2, created_at: 200,
+        }).unwrap();
+
+        let ctx = get_feed_item(&c, "f1").unwrap().expect("item exists");
+        assert_eq!(ctx.title, "Orbital launches");
+        assert_eq!(ctx.url, "https://x.dev/a");
+        assert_eq!(ctx.summary, "an agent");
+        assert_eq!(ctx.reason, "matches");
+        assert_eq!(ctx.monitor_prompt, "ai agents"); // joined from monitors
+
+        assert!(get_feed_item(&c, "nope").unwrap().is_none());
     }
 }
