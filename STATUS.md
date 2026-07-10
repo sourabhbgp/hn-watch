@@ -305,6 +305,38 @@ banner + Re-check pattern) with an "Open Settings" deep-link that self-clears on
 **Takeaway:** the live-in-the-real-app test rule earned its keep — three passing review gates validated
 correct code against a wrong assumption; only running it on the release build surfaced the truth.
 
+## Session 10 — Feed honesty + performance (cosmetic-chrome cleanup + virtualization)
+
+Two small units, both prompted by inspecting the live feed at ~500 items.
+
+**Unit 1 — remove non-functional feed chrome (`feat/remove-cosmetic-feed-chrome`, merged `d5b6a28`).**
+
+- [x] Dropped the header **`● live`** indicator — it was hardcoded/always-pulsing, bound to no state
+      (the honest live signals already live in the sidebar chips: `Checking…`/`error`/`Paused`).
+- [x] Dropped the per-card **`▲ score / 💬 comments`** labels — real HN data but frozen at ingest
+      (fresh stories ≈ `▲1 · 💬0`, never refreshed) and non-interactive with no link to the thread. The
+      footer now holds only **Dig deeper**. Backend `hn_score/hn_comments` plumbing left intact (harmless,
+      no schema change). Verified live in the release build; merged `--no-ff`, pushed, branch kept.
+
+**Unit 2 — feed performance (`feat/feed-virtualization`).** The feed rendered **every** match into the DOM
+at once (unbounded, ~500 and climbing) and re-fetched/re-rendered the whole list on every tick. Fixed with:
+
+- [x] **Backend query cap** — `db::list_feed` now `LIMIT 1000` (recency-first). Bounds the IPC payload and
+      the in-memory JS array regardless of table size. Per-monitor totals stay exact via `count_matches`
+      (a `COUNT`, not this list), so the sidebar can read `1200 matches` while the feed ships the newest
+      1000 — the deliberate, documented cap tradeoff (option (i): generous global cap, keeps instant
+      client-side monitor filtering; server-side per-monitor pagination was the rejected heavier option).
+- [x] **Virtualized list** — `@tanstack/react-virtual` in `Feed.tsx` with dynamic per-row measurement
+      (variable card heights), `gap: 12`, `overscan: 6`, `getItemKey` = item id. Only cards in/near the
+      viewport mount, so the DOM stays constant at any feed size. Empty-state path unchanged.
+- [x] **`React.memo(FeedCard)`** so unchanged cards skip re-render. The `LIMIT` makes the existing
+      full-reload-on-tick cheap, so no incremental-merge complexity was added.
+- [x] **Advisor caught the verification gap** that mattered: "renders/scrolls fine" passes whether or not
+      virtualization works at 500 items. **Proven** instead by a temporary `DEBUG mounted` readout against
+      an injected **1200-row** dataset: header showed `1000 matches` (cap working) while the sidebar showed
+      `1200 matches`, and the mounted `<article>` count held at **9 (top) → 16 (deep scroll)** — the DOM is
+      windowed, not full. Debug line removed before finalizing. `tsc`/`vite build` clean, `cargo test` 37/37.
+
 ## How to run
 
 ```bash
