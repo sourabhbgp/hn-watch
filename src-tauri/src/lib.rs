@@ -55,6 +55,7 @@ pub fn run() {
             commands::start_dig_deeper,
             commands::confirm_dig_deeper,
             commands::cancel_dig_deeper,
+            commands::get_research,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

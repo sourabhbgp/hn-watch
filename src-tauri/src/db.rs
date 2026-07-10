@@ -42,6 +42,29 @@ pub struct FeedItemContext {
     pub monitor_prompt: String,
 }
 
+/// One angle as persisted in a saved research run. `findings` set when `status == "done"`,
+/// `error` set (with the reason) when `status == "failed"`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedAngle {
+    pub id: String,
+    pub icon: String,
+    pub label: String,
+    pub focus: String,
+    pub status: String,
+    pub findings: Option<String>,
+    pub error: Option<String>,
+}
+
+/// A completed dig-deeper run reloaded from disk (latest-wins, one per feed item).
+#[derive(Debug, Clone)]
+pub struct SavedResearch {
+    pub summary: String,
+    pub sections: Vec<crate::agent::BriefSection>,
+    pub angles: Vec<SavedAngle>,
+    pub created_at: i64,
+}
+
 /// Add `column` to `table` only if it isn't already present. SQLite has no
 /// `ADD COLUMN IF NOT EXISTS`, and existing on-disk DBs must upgrade safely.
 /// table/column/decl are static literals here (never user input).
@@ -85,6 +108,13 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
              hn_id TEXT NOT NULL,
              PRIMARY KEY (monitor_id, hn_id)
+         );
+         CREATE TABLE IF NOT EXISTS research (
+             feed_item_id TEXT PRIMARY KEY REFERENCES feed_items(id) ON DELETE CASCADE,
+             summary TEXT NOT NULL,
+             sections TEXT NOT NULL,
+             angles TEXT NOT NULL,
+             created_at INTEGER NOT NULL
          );",
     )?;
     ensure_column(conn, "monitors", "last_checked_at", "INTEGER")?;
@@ -199,6 +229,53 @@ pub fn get_feed_item(conn: &Connection, id: &str) -> rusqlite::Result<Option<Fee
     })?;
     match rows.next() {
         Some(row) => Ok(Some(row?)),
+        None => Ok(None),
+    }
+}
+
+/// Upsert the completed research for a feed item (latest-wins). `sections`/`angles`
+/// are stored as JSON. Called only after a successful synthesis — never on run start.
+pub fn save_research(
+    conn: &Connection,
+    feed_item_id: &str,
+    brief: &crate::agent::Brief,
+    angles: &[SavedAngle],
+    now: i64,
+) -> rusqlite::Result<()> {
+    let sections = serde_json::to_string(&brief.sections).unwrap_or_else(|_| "[]".into());
+    let angles = serde_json::to_string(angles).unwrap_or_else(|_| "[]".into());
+    conn.execute(
+        "INSERT INTO research (feed_item_id, summary, sections, angles, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(feed_item_id) DO UPDATE SET
+             summary = excluded.summary,
+             sections = excluded.sections,
+             angles = excluded.angles,
+             created_at = excluded.created_at",
+        rusqlite::params![feed_item_id, brief.summary, sections, angles, now],
+    )?;
+    Ok(())
+}
+
+/// Load the saved research for a feed item, or `None` if it has never been dug into.
+pub fn get_research(conn: &Connection, feed_item_id: &str) -> rusqlite::Result<Option<SavedResearch>> {
+    let mut stmt = conn.prepare(
+        "SELECT summary, sections, angles, created_at FROM research WHERE feed_item_id = ?1",
+    )?;
+    let mut rows = stmt.query_map([feed_item_id], |r| {
+        let summary: String = r.get(0)?;
+        let sections_json: String = r.get(1)?;
+        let angles_json: String = r.get(2)?;
+        let created_at: i64 = r.get(3)?;
+        Ok((summary, sections_json, angles_json, created_at))
+    })?;
+    match rows.next() {
+        Some(row) => {
+            let (summary, sections_json, angles_json, created_at) = row?;
+            let sections = serde_json::from_str(&sections_json).unwrap_or_default();
+            let angles = serde_json::from_str(&angles_json).unwrap_or_default();
+            Ok(Some(SavedResearch { summary, sections, angles, created_at }))
+        }
         None => Ok(None),
     }
 }
@@ -442,5 +519,86 @@ mod tests {
         assert_eq!(ctx.monitor_prompt, "ai agents"); // joined from monitors
 
         assert!(get_feed_item(&c, "nope").unwrap().is_none());
+    }
+
+    fn seed_item(c: &Connection) {
+        // a monitor + one feed item to hang research off of
+        insert_monitor(c, &sample_monitor("m1")).unwrap();
+        insert_feed_item(c, &FeedRow {
+            id: "f1".into(), monitor_id: "m1".into(), hn_id: "hn1".into(),
+            title: "t".into(), url: "u".into(), domain: "d".into(),
+            summary: "s".into(), reason: "r".into(), hn_score: 1, hn_comments: 1, created_at: 1,
+        }).unwrap();
+    }
+
+    fn sample_brief() -> crate::agent::Brief {
+        crate::agent::Brief {
+            summary: "overview".into(),
+            sections: vec![crate::agent::BriefSection { heading: "H1".into(), body: "b1".into() }],
+        }
+    }
+
+    fn sample_angles() -> Vec<SavedAngle> {
+        vec![
+            SavedAngle { id: "a1".into(), icon: "🔎".into(), label: "Origin".into(),
+                focus: "where it came from".into(), status: "done".into(),
+                findings: Some("found stuff".into()), error: None },
+            SavedAngle { id: "a2".into(), icon: "⚠️".into(), label: "Risks".into(),
+                focus: "risks".into(), status: "failed".into(),
+                findings: None, error: Some("claude timed out".into()) },
+        ]
+    }
+
+    #[test]
+    fn save_and_get_research_round_trips() {
+        let c = mem();
+        seed_item(&c);
+        save_research(&c, "f1", &sample_brief(), &sample_angles(), 777).unwrap();
+
+        let got = get_research(&c, "f1").unwrap().expect("saved");
+        assert_eq!(got.summary, "overview");
+        assert_eq!(got.created_at, 777);
+        assert_eq!(got.sections.len(), 1);
+        assert_eq!(got.sections[0].heading, "H1");
+        assert_eq!(got.angles.len(), 2);
+        assert_eq!(got.angles[0].status, "done");
+        assert_eq!(got.angles[0].findings.as_deref(), Some("found stuff"));
+        assert_eq!(got.angles[1].status, "failed");
+        assert_eq!(got.angles[1].error.as_deref(), Some("claude timed out"));
+    }
+
+    #[test]
+    fn get_research_none_for_unknown_id() {
+        let c = mem();
+        seed_item(&c);
+        assert!(get_research(&c, "nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn save_research_is_latest_wins_upsert() {
+        let c = mem();
+        seed_item(&c);
+        save_research(&c, "f1", &sample_brief(), &sample_angles(), 1).unwrap();
+        let mut b2 = sample_brief();
+        b2.summary = "newer".into();
+        save_research(&c, "f1", &b2, &[], 2).unwrap();
+
+        let got = get_research(&c, "f1").unwrap().expect("saved");
+        assert_eq!(got.summary, "newer");
+        assert_eq!(got.created_at, 2);
+        assert_eq!(got.angles.len(), 0);
+        // exactly one row for f1
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM research WHERE feed_item_id='f1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn deleting_monitor_cascades_research() {
+        let c = mem();
+        c.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        seed_item(&c);
+        save_research(&c, "f1", &sample_brief(), &sample_angles(), 1).unwrap();
+        delete_monitor(&c, "m1").unwrap(); // cascades feed_items -> research
+        assert!(get_research(&c, "f1").unwrap().is_none());
     }
 }

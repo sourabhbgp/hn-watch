@@ -302,7 +302,22 @@ the default (no-query) feed and its cap are unchanged.
 
 ---
 
-## 8. Persist dig-deeper research — reopen the full prior investigation, or dig again
+## 8. Persist dig-deeper research — reopen the full prior investigation, or dig again  ✅ SHIPPED (Session 16)
+
+> Done on `feat/persist-dig-deeper-research`. A single `research` table (one row per `feed_item_id`, PK
+> `REFERENCES feed_items(id) ON DELETE CASCADE`, JSON `sections`/`angles` + `created_at`; additive
+> `CREATE TABLE IF NOT EXISTS`) — chosen over the two-table split below since angles are only ever
+> read/written as a whole set with the brief. `run_swarm` upserts the brief + per-angle results in the
+> `Ok(brief)` synthesis arm only (never on start/cancel/all-failed); the `JoinSet` result widened to
+> `Result<String,String>` so a failed angle keeps its error text. `get_research` command (spawns no
+> `claude`) + `getResearch` binding; `DigDeeperPanel`'s mount effect is **saved-first** (getResearch →
+> render saved view, else planner), a new `"saved"` phase shows angle lanes with findings + done/failed
+> reason, a `researched Xh ago` line, and a `Dig deeper again` button (fresh run, overwrites on
+> completion). Whole-branch review (opus) READY-TO-MERGE with no Critical/Important; live-verified on the
+> release build: **0 `claude` on reopen** (20 samples), cancel-safe re-run (prior run intact), restart
+> persistence. 58/58 tests. See `STATUS.md` (Session 16),
+> `docs/superpowers/specs/2026-07-11-persist-dig-deeper-research-design.md`, and the plan. The rest of
+> this entry is kept for history.
 
 **Problem.** A completed dig-deeper run lives only in the panel's React state. Closing the drawer
 (`App.tsx` sets `digItem = null`, unmounting `DigDeeperPanel`) discards **everything** — the
@@ -365,7 +380,7 @@ desktop; `tauri-plugin-notification` never reads real permission state (stub alw
 `Granted`). The **dig-deeper research swarm — the last core requirement — shipped (Session 14)**
 on `feat/dig-deeper-swarm`, live-verified end-to-end (see `STATUS.md`); **Session 15** then made
 the **planning phase cancellable** (`feat/cancellable-planning`) so closing the panel stops the
-planner too, not just the workers. All core requirements are now complete; remaining items
-(**#6** topic dedup, **#7** full-history search, **#8** persist dig-deeper research) are optional
-enhancements. **Next up: #8 (persist dig-deeper research — reopen the full prior investigation,
-or dig again).**_
+planner too, not just the workers. **#8 (persist dig-deeper research) shipped (Session 16)** on
+`feat/persist-dig-deeper-research`, live-verified (0 `claude` on reopen, cancel-safe, survives
+restart). All core requirements are complete; remaining optional enhancements: **#6** topic
+(near-duplicate) dedup and **#7** full-history feed search (backend FTS5)._
