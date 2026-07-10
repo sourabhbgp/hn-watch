@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ClaudeHealth, FeedItem, Monitor } from "./types";
-import { BRIEF_F1 } from "./mock/data";
 import { Sidebar } from "./components/Sidebar";
 import { Feed } from "./components/Feed";
 import { DigDeeperPanel } from "./components/DigDeeperPanel";
@@ -137,11 +136,7 @@ function App() {
         />
 
         {digItem && (
-          <DigDeeperPanel
-            item={digItem}
-            brief={digItem.id === BRIEF_F1.itemId ? BRIEF_F1 : null}
-            onClose={() => setDigItem(null)}
-          />
+          <DigDeeperPanel key={digItem.id} item={digItem} onClose={() => setDigItem(null)} />
         )}
       </div>
     </div>
