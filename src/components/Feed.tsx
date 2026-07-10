@@ -32,10 +32,6 @@ export function Feed({
           {items.length} {items.length === 1 ? "match" : "matches"}
           {!activeMonitor && ` across ${monitors.length} monitors`}
         </span>
-        <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] text-faint">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ok" />
-          live
-        </span>
       </header>
 
       {/* scrolling feed */}

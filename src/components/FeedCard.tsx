@@ -42,9 +42,7 @@ export function FeedCard({
       </div>
 
       {/* footer */}
-      <div className="mt-3 flex items-center gap-4 text-[12px] text-faint">
-        <span className="font-mono">▲ {item.hnScore}</span>
-        <span className="font-mono">💬 {item.hnComments}</span>
+      <div className="mt-3 flex items-center text-[12px] text-faint">
         <button
           onClick={() => onDigDeeper(item)}
           className="ml-auto rounded-lg border border-hn-border bg-hn-soft px-3 py-1.5 text-[12px] font-semibold text-rust transition-colors hover:bg-hn hover:text-white"
