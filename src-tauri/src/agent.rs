@@ -4,11 +4,23 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
 
-/// Shared agent runtime bound: monitor ticks (one call each) and the future
-/// dig-deeper swarm (many at once) both acquire from this single semaphore.
-fn agent_sem() -> &'static Semaphore {
+/// Reserved-pool concurrency for the shared `claude` runtime. Monitor ticks draw only
+/// from `tick_sem`; the dig-deeper swarm (planner, each worker, synthesis) draws only
+/// from `swarm_sem`. Strict separation (no overflow) means an interactive swarm never
+/// queues behind background ticks, and ticks are never blocked by an in-flight swarm.
+/// Both are FIFO-fair, so a third caller of a full pool simply waits its turn.
+pub const TICK_PERMITS: usize = 2;
+pub const SWARM_PERMITS: usize = 5;
+
+fn tick_sem() -> &'static Semaphore {
     static SEM: OnceLock<Semaphore> = OnceLock::new();
-    SEM.get_or_init(|| Semaphore::new(4))
+    SEM.get_or_init(|| Semaphore::new(TICK_PERMITS))
+}
+
+#[allow(dead_code)]
+fn swarm_sem() -> &'static Semaphore {
+    static SEM: OnceLock<Semaphore> = OnceLock::new();
+    SEM.get_or_init(|| Semaphore::new(SWARM_PERMITS))
 }
 
 /// First candidate path that exists, as a string; None if none exist.
@@ -272,7 +284,7 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
         return Ok(Vec::new());
     }
     let prompt = build_prompt(user_prompt, items);
-    let _permit = agent_sem()
+    let _permit = tick_sem()
         .acquire()
         .await
         .map_err(|e| AgentError::Failed(format!("semaphore closed: {e}")))?;
@@ -394,6 +406,24 @@ mod tests {
         assert!(ClaudeHealth::Missing.message().contains("not found"));
         assert!(ClaudeHealth::NotAuthenticated.message().contains("logged in"));
         assert!(ClaudeHealth::Ok.message().is_empty());
+    }
+
+    #[test]
+    fn pools_are_independent() {
+        tauri::async_runtime::block_on(async {
+            // Exhaust the tick pool entirely...
+            let mut held = Vec::new();
+            for _ in 0..TICK_PERMITS {
+                held.push(tick_sem().acquire().await.unwrap());
+            }
+            assert_eq!(tick_sem().available_permits(), 0);
+            // ...the swarm pool is untouched and still fully available.
+            assert_eq!(swarm_sem().available_permits(), SWARM_PERMITS);
+            let _s = swarm_sem()
+                .try_acquire()
+                .expect("swarm pool must be free while ticks are saturated");
+            drop(held);
+        });
     }
 
     #[test]
