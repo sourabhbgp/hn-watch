@@ -1,7 +1,11 @@
 use serde::Deserialize;
 
 const HITS_PER_PAGE: usize = 100;
-const MAX_PAGES: usize = 10;
+/// Safety cap: fetch at most 5 pages × 100 = 500 stories per tick. This bounds the work
+/// after a long gap (laptop closed for a day/week) — the watermark is stale, so the window
+/// would otherwise be enormous. We take the newest 500, then the watermark self-heals to
+/// ~now on the next tick; older stories in the gap are intentionally skipped.
+const MAX_PAGES: usize = 5;
 
 /// Algolia numericFilters clause: only stories submitted at/after `since`.
 fn numeric_filter(since: i64) -> String {
