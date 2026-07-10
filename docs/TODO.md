@@ -244,6 +244,64 @@ no banner and notifications deliver as today.
 
 ---
 
+## 6. Topic-level (near-duplicate) dedup — same story, different submissions
+
+**Problem.** Today's dedup keys on the exact HN item id (`(monitor_id, hn_id)`), so it only
+stops the **identical** story from repeating. Two **different** HN stories about the **same
+topic** are not deduped and both land as separate feed cards — e.g. the same launch submitted
+twice under different ids, a TechCrunch and a Verge writeup of one announcement, or a next-day
+follow-up on the same event. Each has a distinct `hn_id`, so it passes every existing layer,
+Claude judges each independently, and both match.
+
+**Why it matters.** For a busy monitor a single news event can produce several near-identical
+cards, cluttering the one shared feed and burying genuinely distinct matches. (Raised by the
+user: "is there a possibility that two articles cover the same topic?" — yes, this is that gap.)
+
+**Current behavior.** Four dedup layers (`dedupe_by_hn_id`, the `seen` table, the
+`UNIQUE(monitor_id, hn_id)` constraint, crash-safe commit ordering) all key on `hn_id` — exact
+story identity only. No semantic/topic comparison exists anywhere on the tick path.
+
+**Proposed approach (lightweight first, semantic only if needed).**
+- **Cheap pass — normalized-URL / domain grouping.** Dedup on the canonical article URL (strip
+  tracking params, normalize host) so re-submissions of the *same link* collapse. Catches exact
+  re-posts; misses different articles on the same event. Low cost, no extra `claude` call.
+- **Semantic pass (optional, heavier).** Ask `claude` "is this a near-duplicate of these recent
+  matches?" against the last N feed titles for the monitor, or embed titles and threshold on
+  cosine similarity. Accurate but adds cost/latency per tick and risks wrongly merging two
+  genuinely distinct takes — gate it behind a per-monitor opt-in, don't make it default.
+- Keep the exact-`hn_id` layers exactly as-is underneath either approach.
+
+**Acceptance.** Feed a monitor two distinct HN stories covering one event: the duplicate is
+either collapsed into a single card (or grouped/marked as related) rather than shown twice, and
+two genuinely different matches are **not** wrongly merged.
+
+---
+
+## 7. Full-history feed search (backend FTS5) — beyond the client-side cap
+
+**Problem.** The client-side feed search (shipped on `feat/feed-search`, see
+`docs/superpowers/specs/2026-07-10-feed-search-design.md`) filters only the **newest 1000 items**
+the backend ships (`db::list_feed` `LIMIT 1000`). A query never reaches older matches still in the
+`feed_items` table. Fine for a recency-first watchtower, but it means "search everything I've ever
+matched" isn't possible.
+
+**Why it matters.** As the feed grows past 1000, older matches become unfindable by search even
+though they're persisted. Only relevant once a user has accumulated a large history.
+
+**Current behavior.** Search is a pure frontend filter over the in-memory (capped) feed; no query
+reaches SQLite.
+
+**Proposed approach.** A backend search command — either a `LIKE '%term%'` scan over
+`feed_items(title, summary, reason)` or an SQLite **FTS5** virtual table kept in sync on insert —
+exposed as a `search_feed(query)` Tauri command. The frontend switches to server results when a
+query is active (debounced), falling back to the client-side filter for the empty-query feed.
+Keep the exact-`hn_id` dedup and the `LIMIT`-capped default feed untouched.
+
+**Acceptance.** A query returns matches from the full persisted history, not just the newest 1000;
+the default (no-query) feed and its cap are unchanged.
+
+---
+
 _Order to tackle: **#1 (observability) done (Session 4); #3 (error handling / preflight) done
 (Session 5); #2 (lossless ingestion) done (Session 6).** **#4 (sleep/wake catch-up) — WON'T DO**
 (Session 7: monotonic stopwatch scheduling is intentional; wall-clock rewrite + active-time
