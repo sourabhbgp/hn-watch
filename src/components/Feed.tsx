@@ -107,7 +107,7 @@ export function Feed({
                   style={{ transform: `translateY(${row.start}px)` }}
                 >
                   <div className="mx-auto max-w-2xl px-6">
-                    <FeedCard item={item} onDigDeeper={onDigDeeper} />
+                    <FeedCard item={item} query={query} onDigDeeper={onDigDeeper} />
                   </div>
                 </div>
               );

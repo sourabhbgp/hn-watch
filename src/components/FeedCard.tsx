@@ -1,14 +1,17 @@
 import { memo } from "react";
 import type { FeedItem } from "../types";
+import { highlight } from "../lib/highlight";
 
 // Memoized: in a virtualized list the parent re-renders on every scroll frame
 // and on each per-tick feed refresh. `item` is stable by id and `onDigDeeper`
 // is a stable state setter, so memo lets unchanged cards skip re-rendering.
 export const FeedCard = memo(function FeedCard({
   item,
+  query,
   onDigDeeper,
 }: {
   item: FeedItem;
+  query: string;
   onDigDeeper: (item: FeedItem) => void;
 }) {
   return (
@@ -29,12 +32,12 @@ export const FeedCard = memo(function FeedCard({
         rel="noreferrer"
         className="mt-2 block text-[15px] font-semibold leading-snug text-ink hover:text-hn"
       >
-        {item.title}
+        {highlight(item.title, query)}
       </a>
 
       {/* summary */}
       <p className="mt-1.5 text-[13.5px] leading-relaxed text-soft">
-        {item.summary}
+        {highlight(item.summary, query)}
       </p>
 
       {/* why it matched */}
@@ -42,7 +45,7 @@ export const FeedCard = memo(function FeedCard({
         <span className="font-mono text-[10.5px] uppercase tracking-wide text-faint">
           matched
         </span>
-        <span className="leading-snug">{item.reason}</span>
+        <span className="leading-snug">{highlight(item.reason, query)}</span>
       </div>
 
       {/* footer */}
