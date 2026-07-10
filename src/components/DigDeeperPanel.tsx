@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AngleStatus, FeedItem, PlannedAngle, SwarmAngle } from "../types";
 import {
+  getResearch,
   startDigDeeper,
   confirmDigDeeper,
   cancelDigDeeper,
@@ -9,6 +10,8 @@ import {
   onSwarmBriefReady,
   onSwarmFailed,
 } from "../api";
+import type { SavedAngle } from "../api";
+import { timeAgo } from "../lib/timeAgo";
 
 const STATUS_STYLE: Record<AngleStatus, { chip: string; label: string }> = {
   queued: { chip: "bg-paper text-faint", label: "queued" },
@@ -18,9 +21,10 @@ const STATUS_STYLE: Record<AngleStatus, { chip: string; label: string }> = {
 };
 
 type Brief = { summary: string; sections: { heading: string; body: string }[] };
-type Phase = "planning" | "confirm" | "running";
+type Phase = "planning" | "confirm" | "running" | "saved";
+type LaneAngle = SwarmAngle & { findings?: string };
 
-function AngleLane({ angle }: { angle: SwarmAngle }) {
+function AngleLane({ angle }: { angle: LaneAngle }) {
   const s = STATUS_STYLE[angle.status];
   return (
     <div className="rounded-lg border border-line bg-card p-3">
@@ -45,6 +49,11 @@ function AngleLane({ angle }: { angle: SwarmAngle }) {
           ))}
         </div>
       )}
+      {angle.findings && (
+        <p className="mt-2 whitespace-pre-wrap text-[12px] leading-relaxed text-soft">
+          {angle.findings}
+        </p>
+      )}
       {angle.error && (
         <p className="mt-2 text-[11px] text-rust">{angle.error}</p>
       )}
@@ -55,21 +64,41 @@ function AngleLane({ angle }: { angle: SwarmAngle }) {
 export function DigDeeperPanel({ item, onClose }: { item: FeedItem; onClose: () => void }) {
   const [phase, setPhase] = useState<Phase>("planning");
   const [planned, setPlanned] = useState<PlannedAngle[]>([]);
-  const [angles, setAngles] = useState<SwarmAngle[]>([]);
+  const [angles, setAngles] = useState<LaneAngle[]>([]);
   const [brief, setBrief] = useState<Brief | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [now] = useState(() => Math.floor(Date.now() / 1000));
   const started = useRef(false);
 
   // Mount: run the planner, subscribe to swarm events. Unmount: cancel + unlisten.
   // The panel is keyed by item id in App, so each item gets a fresh mount.
   useEffect(() => {
     let alive = true;
-    startDigDeeper(item.id)
-      .then((a) => {
+    getResearch(item.id)
+      .then((saved) => {
         if (!alive) return;
-        setPlanned(a);
-        setPhase("confirm");
+        if (saved) {
+          // Reopen fast-path: render the saved run, spawn nothing.
+          setBrief({ summary: saved.summary, sections: saved.sections });
+          setSavedAt(saved.createdAt);
+          setAngles(
+            saved.angles.map((a: SavedAngle) => ({
+              id: a.id, icon: a.icon, label: a.label,
+              status: a.status === "failed" ? ("error" as const) : ("done" as const),
+              lines: [],
+              findings: a.findings ?? undefined,
+              error: a.error ?? undefined,
+            })),
+          );
+          setPhase("saved");
+        } else {
+          // No saved run → the normal planner flow.
+          startDigDeeper(item.id)
+            .then((a) => { if (alive) { setPlanned(a); setPhase("confirm"); } })
+            .catch((e) => alive && setFailed(String(e)));
+        }
       })
       .catch((e) => alive && setFailed(String(e)));
 
@@ -133,6 +162,17 @@ export function DigDeeperPanel({ item, onClose }: { item: FeedItem; onClose: () 
     setPhase("running");
     started.current = true;
     confirmDigDeeper(item.id, planned).catch((e) => setFailed(String(e)));
+  };
+
+  const digAgain = () => {
+    setBrief(null);
+    setSavedAt(null);
+    setAngles([]);
+    setFailed(null);
+    setPhase("planning");
+    startDigDeeper(item.id)
+      .then((a) => { setPlanned(a); setPhase("confirm"); })
+      .catch((e) => setFailed(String(e)));
   };
 
   const doneCount = angles.filter((a) => a.status === "done" || a.status === "error").length;
@@ -236,6 +276,19 @@ export function DigDeeperPanel({ item, onClose }: { item: FeedItem; onClose: () 
                     </span>
                   </div>
                   <div className="rounded-xl border border-line bg-card p-4">
+                    {phase === "saved" && savedAt !== null && (
+                      <div className="mb-3 flex items-center justify-between">
+                        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
+                          researched {timeAgo(savedAt, now)} ago
+                        </span>
+                        <button
+                          onClick={digAgain}
+                          className="rounded-md border border-line px-2.5 py-1 text-[11px] text-soft hover:bg-card"
+                        >
+                          Dig deeper again
+                        </button>
+                      </div>
+                    )}
                     <p className="text-[13px] leading-relaxed text-soft">{brief.summary}</p>
                     <div className="mt-4 space-y-3">
                       {brief.sections.map((sec) => (
