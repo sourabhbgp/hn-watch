@@ -1,8 +1,10 @@
+use crate::db::FeedItemContext;
 use crate::hn::HnItem;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
+use uuid::Uuid;
 
 /// Reserved-pool concurrency for the shared `claude` runtime. Monitor ticks draw only
 /// from `tick_sem`; the dig-deeper swarm (planner, each worker, synthesis) draws only
@@ -144,6 +146,111 @@ pub fn parse_verdict(text: &str) -> Vec<Verdict> {
         _ => return Vec::new(),
     };
     serde_json::from_str::<Vec<Verdict>>(&text[start..=end]).unwrap_or_default()
+}
+
+/// Number of investigative angles a swarm may run — enforced client- and server-side.
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+pub const MIN_ANGLES: usize = 2;
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+pub const MAX_ANGLES: usize = 5;
+/// Icon pool, assigned to angles by index (the LLM never emits an emoji).
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+pub const ANGLE_ICONS: [&str; 5] = ["🏢", "🔧", "📊", "🕵️", "🧭"];
+
+/// One investigative angle: what a single swarm worker will look into.
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedAngle {
+    pub id: String,
+    pub icon: String,
+    pub label: String,
+    pub focus: String,
+}
+
+/// Raw planner output before clamping/icon assignment.
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+#[derive(serde::Deserialize)]
+struct RawAngle {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    focus: String,
+}
+
+/// Build a `PlannedAngle` from a label+focus, assigning the icon at `index` (mod pool size)
+/// and a fresh uuid.
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+fn angle_at(index: usize, label: String, focus: String) -> PlannedAngle {
+    PlannedAngle {
+        id: Uuid::new_v4().to_string(),
+        icon: ANGLE_ICONS[index % ANGLE_ICONS.len()].to_string(),
+        label,
+        focus,
+    }
+}
+
+/// Fallback angle set when the planner fails or returns too few usable angles.
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+pub fn default_angles() -> Vec<PlannedAngle> {
+    [
+        ("Company & people", "Who is behind the story — founders, team, backers, org."),
+        ("Tech & how it works", "The underlying technology and how it actually works."),
+        ("Market & rivals", "The market, competitors, and how this compares."),
+        ("Skeptic / risks", "Risks, criticisms, and reasons for skepticism."),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, (l, f))| angle_at(i, (*l).to_string(), (*f).to_string()))
+    .collect()
+}
+
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+pub fn build_plan_prompt(ctx: &FeedItemContext) -> String {
+    format!(
+        "You are planning a research swarm to dig deeper into one Hacker News story, \
+         for a user whose monitor is interested in:\n\"{prompt}\"\n\n\
+         Story: \"{title}\" ({domain}, {url})\n\
+         Why it matched: {reason}\n\
+         Initial summary: {summary}\n\n\
+         Decide between 2 and 5 distinct investigative angles for THIS SPECIFIC STORY. \
+         Each angle should pull from genuinely different context or sources — do not force a \
+         generic template if it doesn't fit.\n\n\
+         Return ONLY a JSON array (2 to 5 elements, no prose, no markdown fences) of objects \
+         with exactly these keys: \"label\" (short 2-4 word angle name) and \"focus\" (one \
+         sentence telling an investigator exactly what to look into).",
+        prompt = ctx.monitor_prompt,
+        title = ctx.title,
+        domain = ctx.domain,
+        url = ctx.url,
+        reason = ctx.reason,
+        summary = ctx.summary,
+    )
+}
+
+/// Parse the planner's JSON array into clamped, icon-assigned angles. Tolerant like
+/// `parse_verdict` (finds the first `[ … ]`). Drops entries with an empty label/focus;
+/// if fewer than `MIN_ANGLES` survive (or the text is unparseable), returns `default_angles()`;
+/// truncates to `MAX_ANGLES`.
+#[allow(dead_code)] // consumed by Task 6 (plan_angles)
+pub fn parse_plan(text: &str) -> Vec<PlannedAngle> {
+    let slice = match (text.find('['), text.rfind(']')) {
+        (Some(s), Some(e)) if e > s => &text[s..=e],
+        _ => return default_angles(),
+    };
+    let raw: Vec<RawAngle> = serde_json::from_str(slice).unwrap_or_default();
+    let cleaned: Vec<PlannedAngle> = raw
+        .into_iter()
+        .filter(|a| !a.label.trim().is_empty() && !a.focus.trim().is_empty())
+        .take(MAX_ANGLES)
+        .enumerate()
+        .map(|(i, a)| angle_at(i, a.label.trim().to_string(), a.focus.trim().to_string()))
+        .collect();
+    if cleaned.len() < MIN_ANGLES {
+        default_angles()
+    } else {
+        cleaned
+    }
 }
 
 /// A classified failure of a single `claude` call. `code()` is stable and drives
@@ -436,5 +543,72 @@ mod tests {
         assert_eq!(got, Some("/bin/sh".to_string()));
         // nothing exists -> None
         assert_eq!(find_claude(vec![missing]), None);
+    }
+
+    fn ctx() -> crate::db::FeedItemContext {
+        crate::db::FeedItemContext {
+            title: "Orbital (YC W26) files your taxes".into(),
+            url: "https://news.ycombinator.com/item?id=1".into(),
+            domain: "news.ycombinator.com".into(),
+            summary: "an agent that prepares tax returns".into(),
+            reason: "AI-agent startup launch".into(),
+            monitor_prompt: "AI-agent startup launches".into(),
+        }
+    }
+
+    #[test]
+    fn build_plan_prompt_contains_story_and_interest() {
+        let p = build_plan_prompt(&ctx());
+        assert!(p.contains("AI-agent startup launches")); // monitor prompt
+        assert!(p.contains("Orbital (YC W26) files your taxes")); // title
+        assert!(p.contains("2 and 5")); // the 2–5 instruction
+    }
+
+    #[test]
+    fn parse_plan_accepts_valid_and_assigns_icons_by_index() {
+        let text = r#"[
+          {"label":"Company","focus":"who founded it"},
+          {"label":"Tech","focus":"how it works"},
+          {"label":"Market","focus":"competitors"}
+        ]"#;
+        let angles = parse_plan(text);
+        assert_eq!(angles.len(), 3);
+        assert_eq!(angles[0].label, "Company");
+        assert_eq!(angles[0].icon, ANGLE_ICONS[0]);
+        assert_eq!(angles[1].icon, ANGLE_ICONS[1]);
+        assert!(!angles[0].id.is_empty()); // uuid assigned
+    }
+
+    #[test]
+    fn parse_plan_drops_empty_entries_then_may_fall_back() {
+        // Only one valid entry survives filtering (< MIN_ANGLES) -> default set.
+        let text = r#"[{"label":"","focus":"x"},{"label":"Only","focus":""},{"label":"Keep","focus":"real"}]"#;
+        let angles = parse_plan(text);
+        assert_eq!(angles.len(), default_angles().len()); // fell back
+    }
+
+    #[test]
+    fn parse_plan_truncates_to_max() {
+        let text = r#"[
+          {"label":"a","focus":"1"},{"label":"b","focus":"2"},{"label":"c","focus":"3"},
+          {"label":"d","focus":"4"},{"label":"e","focus":"5"},{"label":"f","focus":"6"},{"label":"g","focus":"7"}
+        ]"#;
+        assert_eq!(parse_plan(text).len(), MAX_ANGLES); // 5
+    }
+
+    #[test]
+    fn parse_plan_garbage_falls_back() {
+        assert_eq!(parse_plan("not json").len(), default_angles().len());
+        assert_eq!(parse_plan("[]").len(), default_angles().len());
+    }
+
+    #[test]
+    fn default_angles_are_wellformed_and_distinct() {
+        let a = default_angles();
+        assert_eq!(a.len(), 4);
+        assert!(a.iter().all(|x| !x.label.is_empty() && !x.focus.is_empty() && !x.id.is_empty()));
+        // distinct icons for the first 4
+        assert_eq!(a[0].icon, ANGLE_ICONS[0]);
+        assert_eq!(a[3].icon, ANGLE_ICONS[3]);
     }
 }
