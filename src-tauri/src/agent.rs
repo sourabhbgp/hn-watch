@@ -1,8 +1,11 @@
+use crate::db::FeedItemContext;
 use crate::hn::HnItem;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Semaphore;
+use uuid::Uuid;
 
 /// Reserved-pool concurrency for the shared `claude` runtime. Monitor ticks draw only
 /// from `tick_sem`; the dig-deeper swarm (planner, each worker, synthesis) draws only
@@ -12,12 +15,16 @@ use tokio::sync::Semaphore;
 pub const TICK_PERMITS: usize = 2;
 pub const SWARM_PERMITS: usize = 5;
 
+/// Per-call timeouts for the swarm's three phases.
+const PLAN_TIMEOUT_SECS: u64 = 45;
+const ANGLE_TIMEOUT_SECS: u64 = 150;
+const SYNTHESIS_TIMEOUT_SECS: u64 = 90;
+
 fn tick_sem() -> &'static Semaphore {
     static SEM: OnceLock<Semaphore> = OnceLock::new();
     SEM.get_or_init(|| Semaphore::new(TICK_PERMITS))
 }
 
-#[allow(dead_code)]
 fn swarm_sem() -> &'static Semaphore {
     static SEM: OnceLock<Semaphore> = OnceLock::new();
     SEM.get_or_init(|| Semaphore::new(SWARM_PERMITS))
@@ -144,6 +151,102 @@ pub fn parse_verdict(text: &str) -> Vec<Verdict> {
         _ => return Vec::new(),
     };
     serde_json::from_str::<Vec<Verdict>>(&text[start..=end]).unwrap_or_default()
+}
+
+/// Number of investigative angles a swarm may run — enforced client- and server-side.
+pub const MIN_ANGLES: usize = 2;
+pub const MAX_ANGLES: usize = 5;
+/// Icon pool, assigned to angles by index (the LLM never emits an emoji).
+pub const ANGLE_ICONS: [&str; 5] = ["🏢", "🔧", "📊", "🕵️", "🧭"];
+
+/// One investigative angle: what a single swarm worker will look into.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedAngle {
+    pub id: String,
+    pub icon: String,
+    pub label: String,
+    pub focus: String,
+}
+
+/// Raw planner output before clamping/icon assignment.
+#[derive(serde::Deserialize)]
+struct RawAngle {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    focus: String,
+}
+
+/// Build a `PlannedAngle` from a label+focus, assigning the icon at `index` (mod pool size)
+/// and a fresh uuid.
+fn angle_at(index: usize, label: String, focus: String) -> PlannedAngle {
+    PlannedAngle {
+        id: Uuid::new_v4().to_string(),
+        icon: ANGLE_ICONS[index % ANGLE_ICONS.len()].to_string(),
+        label,
+        focus,
+    }
+}
+
+/// Fallback angle set when the planner fails or returns too few usable angles.
+pub fn default_angles() -> Vec<PlannedAngle> {
+    [
+        ("Company & people", "Who is behind the story — founders, team, backers, org."),
+        ("Tech & how it works", "The underlying technology and how it actually works."),
+        ("Market & rivals", "The market, competitors, and how this compares."),
+        ("Skeptic / risks", "Risks, criticisms, and reasons for skepticism."),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, (l, f))| angle_at(i, (*l).to_string(), (*f).to_string()))
+    .collect()
+}
+
+pub fn build_plan_prompt(ctx: &FeedItemContext) -> String {
+    format!(
+        "You are planning a research swarm to dig deeper into one Hacker News story, \
+         for a user whose monitor is interested in:\n\"{prompt}\"\n\n\
+         Story: \"{title}\" ({domain}, {url})\n\
+         Why it matched: {reason}\n\
+         Initial summary: {summary}\n\n\
+         Decide between 2 and 5 distinct investigative angles for THIS SPECIFIC STORY. \
+         Each angle should pull from genuinely different context or sources — do not force a \
+         generic template if it doesn't fit.\n\n\
+         Return ONLY a JSON array (2 to 5 elements, no prose, no markdown fences) of objects \
+         with exactly these keys: \"label\" (short 2-4 word angle name) and \"focus\" (one \
+         sentence telling an investigator exactly what to look into).",
+        prompt = ctx.monitor_prompt,
+        title = ctx.title,
+        domain = ctx.domain,
+        url = ctx.url,
+        reason = ctx.reason,
+        summary = ctx.summary,
+    )
+}
+
+/// Parse the planner's JSON array into clamped, icon-assigned angles. Tolerant like
+/// `parse_verdict` (finds the first `[ … ]`). Drops entries with an empty label/focus;
+/// if fewer than `MIN_ANGLES` survive (or the text is unparseable), returns `default_angles()`;
+/// truncates to `MAX_ANGLES`.
+pub fn parse_plan(text: &str) -> Vec<PlannedAngle> {
+    let slice = match (text.find('['), text.rfind(']')) {
+        (Some(s), Some(e)) if e > s => &text[s..=e],
+        _ => return default_angles(),
+    };
+    let raw: Vec<RawAngle> = serde_json::from_str(slice).unwrap_or_default();
+    let cleaned: Vec<PlannedAngle> = raw
+        .into_iter()
+        .filter(|a| !a.label.trim().is_empty() && !a.focus.trim().is_empty())
+        .take(MAX_ANGLES)
+        .enumerate()
+        .map(|(i, a)| angle_at(i, a.label.trim().to_string(), a.focus.trim().to_string()))
+        .collect();
+    if cleaned.len() < MIN_ANGLES {
+        default_angles()
+    } else {
+        cleaned
+    }
 }
 
 /// A classified failure of a single `claude` call. `code()` is stable and drives
@@ -319,6 +422,316 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
     Ok(parse_verdict(&text))
 }
 
+/// Run one buffered swarm `claude -p` call (planner / synthesis). Acquires a `swarm_sem`
+/// permit, applies `timeout_secs`, and classifies failures like `judge()`.
+async fn run_buffered_swarm(prompt: &str, timeout_secs: u64) -> Result<String, AgentError> {
+    let _permit = swarm_sem()
+        .acquire()
+        .await
+        .map_err(|e| AgentError::Failed(format!("semaphore closed: {e}")))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        claude_command()
+            .arg("-p")
+            .arg("--safe-mode")
+            .arg("--model")
+            .arg("claude-sonnet-5")
+            .arg(prompt)
+            .output(),
+    )
+    .await
+    .map_err(|_| AgentError::Timeout)?
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AgentError::NotFound
+        } else {
+            AgentError::Failed(format!("failed to spawn claude: {e}"))
+        }
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(if is_auth_failure(&stderr) {
+            AgentError::NotAuthenticated
+        } else {
+            AgentError::Failed(format!("claude exited with status {}: {stderr}", output.status))
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Plan the investigative angles for a story. Never errors: any failure (missing/logged-out
+/// claude, timeout, garbage output) resolves to `default_angles()` so the confirm UI always
+/// has a proposal to show.
+pub async fn plan_angles(ctx: &FeedItemContext) -> Vec<PlannedAngle> {
+    match run_buffered_swarm(&build_plan_prompt(ctx), PLAN_TIMEOUT_SECS).await {
+        Ok(text) => parse_plan(&text),
+        Err(_) => default_angles(),
+    }
+}
+
+/// Compile the combined brief from the per-angle results (`Some` = output, `None` = failed).
+pub async fn synthesize(
+    ctx: &FeedItemContext,
+    results: &[(PlannedAngle, Option<String>)],
+) -> Result<Brief, AgentError> {
+    let text = run_buffered_swarm(&build_synthesis_prompt(ctx, results), SYNTHESIS_TIMEOUT_SECS).await?;
+    parse_brief(&text).ok_or_else(|| AgentError::Failed("could not parse brief JSON".into()))
+}
+
+/// Run one investigative worker with live streaming. Acquires a `swarm_sem` permit, spawns
+/// `claude -p --output-format stream-json …` with web tools allow-listed (least privilege),
+/// reads stdout line-by-line, forwards each progress line via `on_progress`, and returns the
+/// authoritative final text from the terminal `result` event. Times out at `ANGLE_TIMEOUT_SECS`.
+///
+/// NOTE (Task 1): if web tools are unavailable in headless `-p`, drop the two `--allowedTools`
+/// args to run closed-book — the rest is unchanged.
+pub async fn stream_investigate(
+    ctx: &FeedItemContext,
+    angle: &PlannedAngle,
+    on_progress: impl Fn(String),
+) -> Result<String, AgentError> {
+    let _permit = swarm_sem()
+        .acquire()
+        .await
+        .map_err(|e| AgentError::Failed(format!("semaphore closed: {e}")))?;
+    let prompt = build_investigate_prompt(ctx, angle);
+
+    let mut child = claude_command()
+        .arg("-p")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose")
+        .arg("--allowedTools")
+        .arg("WebSearch")
+        .arg("WebFetch")
+        .arg("--model")
+        .arg("claude-sonnet-5")
+        .arg(&prompt)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AgentError::NotFound
+            } else {
+                AgentError::Failed(format!("failed to spawn claude: {e}"))
+            }
+        })?;
+
+    let stdout = child.stdout.take().ok_or_else(|| AgentError::Failed("no stdout".into()))?;
+
+    // Drive the whole read under one timeout; on timeout the `child` drops (kill_on_drop) at fn exit.
+    let read = async {
+        let mut lines = BufReader::new(stdout).lines();
+        let mut final_text: Option<String> = None;
+        while let Ok(Some(line)) = lines.next_line().await {
+            match parse_stream_line(&line) {
+                StreamLine::Progress(p) => on_progress(p),
+                StreamLine::Final { text, is_error } => {
+                    if is_error {
+                        return Err(AgentError::Failed("agent reported an error".into()));
+                    }
+                    final_text = Some(text);
+                }
+                StreamLine::Ignore => {}
+            }
+        }
+        // Reap the process; a non-zero exit with no result line is a failure.
+        let status = child.wait().await.map_err(|e| AgentError::Failed(format!("wait failed: {e}")))?;
+        match final_text {
+            Some(t) if status.success() => Ok(t),
+            _ => Err(AgentError::Failed(format!("worker produced no result (status {status})"))),
+        }
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(ANGLE_TIMEOUT_SECS), read)
+        .await
+        .map_err(|_| AgentError::Timeout)?
+}
+
+/// Compiled research brief — matches the frontend `Brief` (summary + sections). The panel
+/// supplies itemId/angles itself, so the payload only needs these two.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Brief {
+    pub summary: String,
+    pub sections: Vec<BriefSection>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BriefSection {
+    pub heading: String,
+    pub body: String,
+}
+
+pub fn build_investigate_prompt(ctx: &FeedItemContext, angle: &PlannedAngle) -> String {
+    format!(
+        "You are one investigator in a research swarm looking into a single HN story, \
+         focused ONLY on this angle:\n\"{focus}\"\n\n\
+         Story: \"{title}\" ({url})\n\
+         Context: this matched a monitor interested in \"{prompt}\" because: {reason}\n\n\
+         Investigate strictly from your assigned angle — don't try to cover the whole story. \
+         Use web search / fetch to look into the story and related context. Produce a concise \
+         3-6 sentence findings write-up that stands on its own — it will be compiled into a \
+         combined brief.",
+        focus = angle.focus,
+        title = ctx.title,
+        url = ctx.url,
+        prompt = ctx.monitor_prompt,
+        reason = ctx.reason,
+    )
+}
+
+pub fn build_synthesis_prompt(ctx: &FeedItemContext, results: &[(PlannedAngle, Option<String>)]) -> String {
+    let mut body = String::new();
+    for (angle, output) in results {
+        match output {
+            Some(text) => body.push_str(&format!("\n### {}\n{}\n", angle.label, text)),
+            None => body.push_str(&format!(
+                "\n[Note: the \"{}\" angle could not be completed (timed out or failed).]\n",
+                angle.label
+            )),
+        }
+    }
+    format!(
+        "Compile a combined research brief from {n} investigators who each looked at one HN \
+         story from a different angle.\n\n\
+         Story: \"{title}\" ({url})\n{body}\n\
+         Respond with ONLY the brief itself as Markdown — no preamble, no meta-commentary, no \
+         code fences, and do not restate this instruction. Begin directly with a 2-3 sentence \
+         overview paragraph (no heading above it), then one `## Heading` section per angle \
+         (reuse or reorganize the angle labels as headings) with a short body under each.",
+        n = results.len(),
+        title = ctx.title,
+        url = ctx.url,
+        body = body,
+    )
+}
+
+/// Parse the synthesis Markdown into a `Brief`. The overview (everything before the first
+/// `#`-heading) becomes `summary`; each heading line starts a section whose body runs to the
+/// next heading. Unlike a strict JSON parse, this tolerates raw line breaks, bullets, and a
+/// truncated tail — a cut-off brief still yields every section that completed. Returns `None`
+/// only when the text is empty (a genuine synthesis failure).
+pub fn parse_brief(text: &str) -> Option<Brief> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    // A Markdown heading line: one or more leading `#` followed by a space.
+    let heading_of = |line: &str| -> Option<String> {
+        let t = line.trim_start();
+        let rest = t.trim_start_matches('#');
+        if rest.len() < t.len() && rest.starts_with(' ') {
+            Some(rest.trim().to_string())
+        } else {
+            None
+        }
+    };
+
+    let mut summary = String::new();
+    let mut sections: Vec<BriefSection> = Vec::new();
+    let mut current: Option<BriefSection> = None;
+
+    for line in text.lines() {
+        if let Some(heading) = heading_of(line) {
+            if let Some(sec) = current.take() {
+                sections.push(sec);
+            }
+            current = Some(BriefSection { heading, body: String::new() });
+        } else if let Some(sec) = current.as_mut() {
+            sec.body.push_str(line);
+            sec.body.push('\n');
+        } else {
+            summary.push_str(line);
+            summary.push('\n');
+        }
+    }
+    if let Some(sec) = current.take() {
+        sections.push(sec);
+    }
+    for sec in sections.iter_mut() {
+        sec.body = sec.body.trim().to_string();
+    }
+    Some(Brief { summary: summary.trim().to_string(), sections })
+}
+
+/// One parsed line of `--output-format stream-json`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamLine {
+    /// A human-readable progress line for the live lane.
+    Progress(String),
+    /// The terminal result event: the authoritative final output for the angle.
+    Final { text: String, is_error: bool },
+    /// system / user / unknown / non-JSON — nothing to show.
+    Ignore,
+}
+
+/// Truncate a progress line so a chatty model can't flood the UI.
+fn truncate_progress(s: &str) -> String {
+    const MAX: usize = 160;
+    let s = s.trim();
+    if s.chars().count() > MAX {
+        format!("{}…", s.chars().take(MAX).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+/// Map one stream-json line to a `StreamLine`. Never panics on malformed input.
+/// NOTE: field names verified in Task 1 — adjust here if the real CLI differs.
+pub fn parse_stream_line(line: &str) -> StreamLine {
+    let v: serde_json::Value = match serde_json::from_str(line.trim()) {
+        Ok(v) => v,
+        Err(_) => return StreamLine::Ignore,
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("assistant") => {
+            let blocks = v
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array());
+            if let Some(blocks) = blocks {
+                for b in blocks {
+                    match b.get("type").and_then(|t| t.as_str()) {
+                        Some("text") => {
+                            if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                                if !t.trim().is_empty() {
+                                    return StreamLine::Progress(truncate_progress(t));
+                                }
+                            }
+                        }
+                        Some("tool_use") => {
+                            let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                            // surface the most useful input value (query or url) if present
+                            let detail = b
+                                .get("input")
+                                .and_then(|i| i.get("query").or_else(|| i.get("url")))
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("");
+                            let line = if detail.is_empty() {
+                                format!("⚙ {name}")
+                            } else {
+                                format!("⚙ {name}: {detail}")
+                            };
+                            return StreamLine::Progress(truncate_progress(&line));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            StreamLine::Ignore
+        }
+        Some("result") => {
+            let text = v.get("result").and_then(|r| r.as_str()).unwrap_or("").to_string();
+            let is_error = v.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false);
+            StreamLine::Final { text, is_error }
+        }
+        _ => StreamLine::Ignore,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +849,157 @@ mod tests {
         assert_eq!(got, Some("/bin/sh".to_string()));
         // nothing exists -> None
         assert_eq!(find_claude(vec![missing]), None);
+    }
+
+    fn ctx() -> crate::db::FeedItemContext {
+        crate::db::FeedItemContext {
+            title: "Orbital (YC W26) files your taxes".into(),
+            url: "https://news.ycombinator.com/item?id=1".into(),
+            domain: "news.ycombinator.com".into(),
+            summary: "an agent that prepares tax returns".into(),
+            reason: "AI-agent startup launch".into(),
+            monitor_prompt: "AI-agent startup launches".into(),
+        }
+    }
+
+    #[test]
+    fn build_plan_prompt_contains_story_and_interest() {
+        let p = build_plan_prompt(&ctx());
+        assert!(p.contains("AI-agent startup launches")); // monitor prompt
+        assert!(p.contains("Orbital (YC W26) files your taxes")); // title
+        assert!(p.contains("2 and 5")); // the 2–5 instruction
+    }
+
+    #[test]
+    fn parse_plan_accepts_valid_and_assigns_icons_by_index() {
+        let text = r#"[
+          {"label":"Company","focus":"who founded it"},
+          {"label":"Tech","focus":"how it works"},
+          {"label":"Market","focus":"competitors"}
+        ]"#;
+        let angles = parse_plan(text);
+        assert_eq!(angles.len(), 3);
+        assert_eq!(angles[0].label, "Company");
+        assert_eq!(angles[0].icon, ANGLE_ICONS[0]);
+        assert_eq!(angles[1].icon, ANGLE_ICONS[1]);
+        assert!(!angles[0].id.is_empty()); // uuid assigned
+    }
+
+    #[test]
+    fn parse_plan_drops_empty_entries_then_may_fall_back() {
+        // Only one valid entry survives filtering (< MIN_ANGLES) -> default set.
+        let text = r#"[{"label":"","focus":"x"},{"label":"Only","focus":""},{"label":"Keep","focus":"real"}]"#;
+        let angles = parse_plan(text);
+        assert_eq!(angles.len(), default_angles().len()); // fell back
+    }
+
+    #[test]
+    fn parse_plan_truncates_to_max() {
+        let text = r#"[
+          {"label":"a","focus":"1"},{"label":"b","focus":"2"},{"label":"c","focus":"3"},
+          {"label":"d","focus":"4"},{"label":"e","focus":"5"},{"label":"f","focus":"6"},{"label":"g","focus":"7"}
+        ]"#;
+        assert_eq!(parse_plan(text).len(), MAX_ANGLES); // 5
+    }
+
+    #[test]
+    fn parse_plan_garbage_falls_back() {
+        assert_eq!(parse_plan("not json").len(), default_angles().len());
+        assert_eq!(parse_plan("[]").len(), default_angles().len());
+    }
+
+    #[test]
+    fn default_angles_are_wellformed_and_distinct() {
+        let a = default_angles();
+        assert_eq!(a.len(), 4);
+        assert!(a.iter().all(|x| !x.label.is_empty() && !x.focus.is_empty() && !x.id.is_empty()));
+        // distinct icons for the first 4
+        assert_eq!(a[0].icon, ANGLE_ICONS[0]);
+        assert_eq!(a[3].icon, ANGLE_ICONS[3]);
+    }
+
+    fn sample_angle() -> PlannedAngle {
+        angle_at(0, "Funding".into(), "the funding round and investors".into())
+    }
+
+    #[test]
+    fn build_investigate_prompt_contains_focus_and_story() {
+        let p = build_investigate_prompt(&ctx(), &sample_angle());
+        assert!(p.contains("the funding round and investors")); // focus
+        assert!(p.contains("Orbital (YC W26) files your taxes")); // title
+        assert!(p.contains("AI-agent startup launches")); // monitor interest
+    }
+
+    #[test]
+    fn build_synthesis_prompt_notes_failures() {
+        let results = vec![
+            (sample_angle(), Some("Raised $4M seed.".to_string())),
+            (angle_at(1, "Market".into(), "rivals".into()), None), // failed
+        ];
+        let p = build_synthesis_prompt(&ctx(), &results);
+        assert!(p.contains("Raised $4M seed.")); // succeeded angle's output
+        assert!(p.contains("Funding")); // its label as a heading
+        assert!(p.contains("could not be completed")); // the failure note
+    }
+
+    #[test]
+    fn parse_brief_reads_summary_and_sections() {
+        let text = "A tax agent that files your taxes.\n\n## What\nIt files taxes.\n\n## Why\nSaves time.";
+        let b = parse_brief(text).expect("parses");
+        assert_eq!(b.summary, "A tax agent that files your taxes.");
+        assert_eq!(b.sections.len(), 2);
+        assert_eq!(b.sections[0].heading, "What");
+        assert_eq!(b.sections[0].body, "It files taxes.");
+        assert_eq!(b.sections[1].heading, "Why");
+    }
+
+    #[test]
+    fn parse_brief_tolerates_multiline_bodies() {
+        // Regression: the live failure was a strict JSON parse choking on raw line breaks and
+        // bullets inside a prose body. Markdown parsing must keep them verbatim.
+        let text = "Overview.\n\n## Details\nLine one.\nLine two.\n\n- bullet a\n- bullet b";
+        let b = parse_brief(text).expect("parses");
+        assert_eq!(b.summary, "Overview.");
+        assert_eq!(b.sections.len(), 1);
+        assert!(b.sections[0].body.contains("Line one.\nLine two."));
+        assert!(b.sections[0].body.contains("- bullet a"));
+    }
+
+    #[test]
+    fn parse_brief_no_headings_is_summary_only() {
+        let b = parse_brief("Just a paragraph, no sections.").expect("parses");
+        assert_eq!(b.summary, "Just a paragraph, no sections.");
+        assert!(b.sections.is_empty());
+    }
+
+    #[test]
+    fn parse_brief_empty_is_none() {
+        assert!(parse_brief("").is_none());
+        assert!(parse_brief("   \n  \t ").is_none());
+    }
+
+    #[test]
+    fn parse_stream_line_classifies() {
+        // assistant text block -> Progress
+        let text = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Looking into funding"}]}}"#;
+        assert_eq!(parse_stream_line(text), StreamLine::Progress("Looking into funding".into()));
+
+        // tool_use -> Progress with a tool label
+        let tool = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"WebSearch","input":{"query":"orbital yc"}}]}}"#;
+        match parse_stream_line(tool) {
+            StreamLine::Progress(s) => assert!(s.contains("WebSearch")),
+            other => panic!("expected Progress, got {other:?}"),
+        }
+
+        // result -> Final
+        let result = r#"{"type":"result","subtype":"success","is_error":false,"result":"Final findings."}"#;
+        assert_eq!(
+            parse_stream_line(result),
+            StreamLine::Final { text: "Final findings.".into(), is_error: false }
+        );
+
+        // system + non-json -> Ignore
+        assert_eq!(parse_stream_line(r#"{"type":"system","subtype":"init"}"#), StreamLine::Ignore);
+        assert_eq!(parse_stream_line("not json"), StreamLine::Ignore);
     }
 }

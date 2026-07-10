@@ -407,6 +407,45 @@ stale watermark can't request an enormous window.
 - [x] **Verified** — `hn::` unit tests pass, `cargo build` clean. Merged `feat/cap-fetch-500` →
       `main` (`--no-ff`), branch pushed to origin and kept.
 
+## Session 14 — Dig-deeper research swarm (last core phase) (`feat/dig-deeper-swarm`)
+
+**Done** — the "Dig deeper" button is now real: an orchestrator-worker swarm of parallel
+`claude -p` agents, planned per-story, streamed live, compiled into one brief. Built via
+brainstorm → spec → 11-task plan → subagent-driven execution (fresh implementer + reviewer
+per task) → clean whole-branch review → live native-window verification.
+
+- [x] **Two reserved concurrency pools** (`agent.rs`) replace the old single semaphore:
+      `tick_sem` (2 permits, monitor ticks) + `swarm_sem` (5 permits, dig-deeper). Strict
+      separation so a swarm never starves ticks and vice-versa. **Verified live:** a swarm
+      planner + two monitor ticks ran concurrently.
+- [x] **Dynamic angle planning** — a Sonnet planner proposes **2–5** story-specific angles
+      (not a fixed count); clamps/falls back to defaults on bad output. Icons assigned by index.
+- [x] **Human-in-the-loop confirm popup** (`DigDeeperPanel.tsx`) — edit the proposed angles
+      (remove pills, add a free-text word *or* full sentence to steer a new angle) before
+      launch; the agent count updates live. **Verified live:** remove + free-text add.
+- [x] **Streaming workers** — each angle is one `claude -p --output-format stream-json
+      --allowedTools WebSearch WebFetch --model claude-sonnet-5` (least privilege, no
+      `--safe-mode`); `parse_stream_line` forwards live tool/text progress to per-angle lanes
+      via Tauri events. Planner/synthesis are buffered `--safe-mode` (closed-book).
+- [x] **Cancellation** via `tokio::task::JoinSet` (+ `kill_on_drop`): closing the panel aborts
+      in-flight workers, kills their `claude` children, and releases permits. **Verified live:**
+      all 4 workers gone within 1s of close, zero orphans.
+- [x] **Graceful degradation** — a failed/timed-out/killed angle shows `failed` in its lane
+      and the synthesis still compiles a brief from the survivors, honestly noting the
+      incomplete angle. **Verified live:** killed 1 of 3 workers → degraded brief rendered.
+- [x] **Brief format fix (found by live verification)** — synthesis originally returned a
+      strict JSON object; on real-scale output the model intermittently emitted raw line breaks
+      inside prose `body` values, which `serde_json` rejects, discarding the whole brief
+      ("could not parse brief JSON"). **Switched the synthesis contract to Markdown** (overview
+      + `## sections`); `parse_brief` splits on headings — no escaping failure class, and a
+      truncated brief still yields every completed section. `whitespace-pre-wrap` on the body.
+- [x] **Verified** — 52/52 lib tests, `cargo build` clean, whole-branch review "ready to merge",
+      and full live native-window run (plan → edit → stream → degraded brief → cancellation).
+      Merged `feat/dig-deeper-swarm` → `main` (`--no-ff`), branch pushed to origin and kept.
+- [x] **Known Minor (cosmetic):** the model may emit `**bold**` in section bodies, which shows
+      literal asterisks (no Markdown renderer, just `pre-wrap`). Content is fully readable; a
+      "plain prose, no emphasis" prompt nudge or a small renderer is a trivial future polish.
+
 ## How to run
 
 ```bash
@@ -420,14 +459,15 @@ Requires Node 20+, Rust stable, and `claude` on the PATH (used from Phase 3 onwa
 [`docs/TESTING.md`](docs/TESTING.md) for the verified computer-use test loop (launch → screenshot →
 drive). Verified working end-to-end in Session 1.
 
-## Next — Dig-deeper research swarm (last phase)
+## Next — core requirement complete
 
-- [ ] Rust orchestrator spins up several parallel `claude -p` agents, live streaming → one compiled
-      brief (currently mock in the UI, reusing the shared `agent` runtime)
+All core phases are built: monitors + persistence + tick loop, observability, error handling,
+lossless ingestion, tray + notifications, and now the **dig-deeper research swarm** (Session 14).
 
 ## Backlog (later phases)
 
 - [ ] Polish + design write-up / trade-offs in README
+- [ ] Brief Markdown polish — render (or strip) inline `**bold**`/`_italic_` in section bodies
 
 ---
 

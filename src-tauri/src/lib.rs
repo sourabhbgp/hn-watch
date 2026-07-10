@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod hn;
 mod scheduler;
+mod swarm;
 mod tick;
 mod tray;
 
@@ -51,6 +52,9 @@ pub fn run() {
             commands::list_feed,
             commands::claude_health,
             commands::recheck_claude,
+            commands::start_dig_deeper,
+            commands::confirm_dig_deeper,
+            commands::cancel_dig_deeper,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

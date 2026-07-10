@@ -1,6 +1,7 @@
 use crate::agent::{self, ClaudeHealth};
 use crate::db::{self, Monitor};
 use crate::scheduler::Scheduler;
+use crate::swarm::{self, SwarmRegistry};
 use crate::tick::now_secs;
 use rusqlite::Connection;
 use serde::Serialize;
@@ -12,6 +13,7 @@ pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub scheduler: Scheduler,
     pub claude_health: Arc<Mutex<ClaudeHealth>>,
+    pub swarm: SwarmRegistry,
 }
 
 #[derive(Serialize)]
@@ -227,6 +229,48 @@ pub async fn recheck_claude(
     Ok(ClaudeHealthDto::from_health(&health))
 }
 
+/// Start dig-deeper on a feed item: load its context and run the planner, returning the
+/// proposed angles. Nothing runs yet — the frontend edits the list and calls `confirm_dig_deeper`.
+/// Stateless across the two calls (the proposal lives in the frontend, not the backend).
+#[tauri::command]
+pub async fn start_dig_deeper(
+    state: State<'_, AppState>,
+    item_id: String,
+) -> Result<Vec<agent::PlannedAngle>, String> {
+    // Load context (lock, read, drop) before the await — never hold the guard across it.
+    let ctx = {
+        let conn = state.db.lock().map_err(|_| "db poisoned".to_string())?;
+        db::get_feed_item(&conn, &item_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "feed item not found".to_string())?
+    };
+    Ok(agent::plan_angles(&ctx).await)
+}
+
+/// Confirm the (edited) angle list and fire the swarm. Re-clamps to MIN..=MAX server-side.
+#[tauri::command]
+pub fn confirm_dig_deeper(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    item_id: String,
+    angles: Vec<agent::PlannedAngle>,
+) -> Result<(), String> {
+    let mut angles = angles;
+    angles.truncate(agent::MAX_ANGLES);
+    if angles.len() < agent::MIN_ANGLES {
+        return Err(format!("need at least {} angles", agent::MIN_ANGLES));
+    }
+    swarm::run_swarm(app, Arc::clone(&state.db), &state.swarm, item_id, angles);
+    Ok(())
+}
+
+/// Cancel a running swarm (panel closed / switched items). Idempotent.
+#[tauri::command]
+pub fn cancel_dig_deeper(state: State<'_, AppState>, item_id: String) -> Result<(), String> {
+    state.swarm.cancel(&item_id);
+    Ok(())
+}
+
 /// Called once at startup: open/create the DB, spawn a worker per monitor, and
 /// kick off an async Claude preflight (never blocks the window).
 pub fn init_state(app: &AppHandle) -> AppState {
@@ -237,6 +281,7 @@ pub fn init_state(app: &AppHandle) -> AppState {
     let db = Arc::new(Mutex::new(conn));
     let scheduler = Scheduler::new();
     let claude_health = Arc::new(Mutex::new(ClaudeHealth::Ok));
+    let swarm = SwarmRegistry::new();
 
     let existing = {
         let conn = db.lock().unwrap();
@@ -257,7 +302,7 @@ pub fn init_state(app: &AppHandle) -> AppState {
         });
     }
 
-    AppState { db, scheduler, claude_health }
+    AppState { db, scheduler, claude_health, swarm }
 }
 
 #[cfg(test)]
