@@ -72,7 +72,7 @@ export function Feed({
             placeholder="Search this feed…"
             className="w-56 rounded-md border border-line bg-card py-1.5 pl-3 pr-7 text-[12.5px] text-ink placeholder:text-faint focus:border-hn-border focus:outline-none"
           />
-          {query && (
+          {query.trim() && (
             <button
               type="button"
               onClick={() => onQueryChange("")}

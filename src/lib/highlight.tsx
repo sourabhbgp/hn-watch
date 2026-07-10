@@ -15,11 +15,12 @@ function escapeRegExp(s: string): string {
 export function highlight(text: string, query: string): ReactNode {
   const terms = parseTerms(query);
   if (terms.length === 0) return text;
-  const re = new RegExp(`(${terms.map(escapeRegExp).join("|")})`, "gi");
+  const ordered = [...terms].sort((a, b) => b.length - a.length);
+  const re = new RegExp(`(${ordered.map(escapeRegExp).join("|")})`, "gi");
   // With one capturing group, split() interleaves matches at odd indices.
   return text.split(re).map((part, i) =>
     i % 2 === 1 ? (
-      <mark key={i} className="rounded-[2px] bg-hn-soft text-ink">
+      <mark key={i} className="rounded-sm bg-hn-soft text-ink">
         {part}
       </mark>
     ) : (
