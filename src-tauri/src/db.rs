@@ -136,10 +136,16 @@ pub fn insert_feed_item(conn: &Connection, f: &FeedRow) -> rusqlite::Result<()> 
 
 pub fn list_feed(conn: &Connection) -> rusqlite::Result<Vec<(FeedRow, String)>> {
     let mut stmt = conn.prepare(
+        // Cap the returned window to the most-recent rows. The list is a
+        // watchtower feed (recency-first), so older items beyond the cap are
+        // intentionally not shipped to the UI — this bounds IPC payload and the
+        // in-memory JS array regardless of how large the table grows. Per-monitor
+        // match totals stay exact via `count_matches` (a COUNT, not this list).
         "SELECT f.id, f.monitor_id, f.hn_id, f.title, f.url, f.domain, f.summary, f.reason,
                 f.hn_score, f.hn_comments, f.created_at, m.name
          FROM feed_items f JOIN monitors m ON m.id = f.monitor_id
-         ORDER BY f.created_at DESC",
+         ORDER BY f.created_at DESC
+         LIMIT 1000",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
