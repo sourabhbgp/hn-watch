@@ -463,6 +463,48 @@ per task) → clean whole-branch review → live native-window verification.
       `claude` needed), plus `cancel_unknown_item_is_noop`. **54/54** lib tests, `cargo build`
       clean. Merged `feat/cancellable-planning` → `main` (`--no-ff`), branch pushed to origin.
 
+## Session 16 — Persist dig-deeper research (TODO #8) (`feat/persist-dig-deeper-research`)
+
+**Done** — a completed dig-deeper run is now saved per story: reopening a researched item shows the
+brief + every angle used **instantly with zero new `claude` processes**, and a **Dig deeper again**
+button re-runs on demand. Built via brainstorm → spec → 6-task plan → subagent-driven execution
+(fresh implementer + reviewer per task, all review-clean) → whole-branch review (opus) → live verify.
+
+- [x] **New `research` table** (`db.rs`) — single row per feed item, `feed_item_id` PK
+      `REFERENCES feed_items(id) ON DELETE CASCADE`, JSON `sections`/`angles` columns + `created_at`.
+      Additive `CREATE TABLE IF NOT EXISTS` migration (upgrades existing on-disk DBs; verified the new
+      build created the table on first launch). Chose one JSON table over the TODO's two-table split —
+      angles are only ever read/written as a whole set with the brief, so a join buys nothing. Covered
+      by 4 unit tests (round-trip incl. a failed angle w/ error text · none-for-unknown-id ·
+      latest-wins upsert (one row) · monitor-delete cascade).
+- [x] **Save on completion, never on start** (`swarm.rs`) — `run_swarm` upserts the brief + per-angle
+      results in the `Ok(brief)` synthesis arm (the sole `save_research` call site), before the
+      `swarm-brief-ready` emit. A cancelled run (task aborted pre-synthesis) and an all-angles-failed
+      run save nothing. The `JoinSet` result widened to `Result<String, String>` so a failed angle
+      **retains its error text** for the saved view.
+- [x] **Load path** — `get_research` Tauri command (pure DB read, spawns no `claude`) →
+      `api.ts getResearch(itemId)`. **Saved-first reopen:** `DigDeeperPanel`'s mount effect calls
+      `getResearch` first and only falls through to the planner (`startDigDeeper`) when nothing is
+      saved — the zero-`claude`-on-reopen guarantee. New `"saved"` phase renders reused angle lanes
+      showing each angle's **findings + done/failed status (with reason)**, a quiet `researched Xh ago`
+      line, and the `Dig deeper again` button (resets to a fresh plan→confirm→run; overwrites on
+      completion). Live view unchanged (findings not retrofitted).
+- [x] **Whole-branch review (opus): READY TO MERGE — YES.** No Critical/Important. All five invariants
+      verified by enumeration (single save site in the Ok-arm; single planner call in the !saved
+      branch). Strengthened: no `await` between synthesis-`Ok` and the save, so a racing cancel can't
+      skip the save of a run that *did* complete. Only cosmetic/pre-existing Minors, all deferred
+      (e.g. reopen briefly shows "Planning…" until `getResearch` resolves; `digAgain` lacks an
+      `alive` guard — backend still cancelled on close).
+- [x] **Verified** — 58/58 lib tests, `cargo build` + `npm run build` zero warnings/errors, and a full
+      **live native-window run** on the release build: ran a 2-angle dig-deeper → saved after ~60s;
+      **reopen spawned 0 `claude`** (20 samples/6s) and rendered the saved brief + lanes + timestamp +
+      Dig-deeper-again; **cancel-safety** — a re-run cancelled mid-plan killed the planner <1s and left
+      the prior saved run untouched (`created_at` unchanged, still one row); **restart persistence** —
+      after quit + relaunch the reopen loaded the saved view from disk with 0 `claude`. (Overwrite
+      mechanics covered by the `save_research_is_latest_wins_upsert` unit test + the live-proven load
+      path.) Merged `feat/persist-dig-deeper-research` → `main` (`--no-ff`), branch pushed to origin
+      and kept.
+
 ## How to run
 
 ```bash
