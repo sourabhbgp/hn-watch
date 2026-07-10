@@ -47,6 +47,27 @@ impl ClaudeHealthDto {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SavedAngleDto {
+    pub id: String,
+    pub icon: String,
+    pub label: String,
+    pub focus: String,
+    pub status: String,
+    pub findings: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedResearchDto {
+    pub summary: String,
+    pub sections: Vec<agent::BriefSection>, // BriefSection already serializes camelCase; reuse it
+    pub angles: Vec<SavedAngleDto>,
+    pub created_at: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FeedDto {
     pub id: String,
     pub monitor_id: String,
@@ -264,6 +285,30 @@ pub fn confirm_dig_deeper(
 pub fn cancel_dig_deeper(state: State<'_, AppState>, item_id: String) -> Result<(), String> {
     state.swarm.cancel(&item_id);
     Ok(())
+}
+
+/// Load the saved dig-deeper run for a feed item, or `null` if it was never dug into.
+/// Reading spawns no `claude` — this is the reopen fast-path.
+#[tauri::command]
+pub fn get_research(
+    state: State<'_, AppState>,
+    item_id: String,
+) -> Result<Option<SavedResearchDto>, String> {
+    let conn = state.db.lock().map_err(|_| "db poisoned".to_string())?;
+    let saved = db::get_research(&conn, &item_id).map_err(|e| e.to_string())?;
+    Ok(saved.map(|s| SavedResearchDto {
+        summary: s.summary,
+        sections: s.sections,
+        angles: s
+            .angles
+            .into_iter()
+            .map(|a| SavedAngleDto {
+                id: a.id, icon: a.icon, label: a.label, focus: a.focus,
+                status: a.status, findings: a.findings, error: a.error,
+            })
+            .collect(),
+        created_at: s.created_at,
+    }))
 }
 
 /// Called once at startup: open/create the DB, spawn a worker per monitor, and

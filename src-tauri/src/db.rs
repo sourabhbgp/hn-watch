@@ -57,7 +57,6 @@ pub struct SavedAngle {
 }
 
 /// A completed dig-deeper run reloaded from disk (latest-wins, one per feed item).
-#[allow(dead_code)] // consumed by Task 2/3
 #[derive(Debug, Clone)]
 pub struct SavedResearch {
     pub summary: String,
@@ -259,7 +258,6 @@ pub fn save_research(
 }
 
 /// Load the saved research for a feed item, or `None` if it has never been dug into.
-#[allow(dead_code)] // consumed by Task 2/3
 pub fn get_research(conn: &Connection, feed_item_id: &str) -> rusqlite::Result<Option<SavedResearch>> {
     let mut stmt = conn.prepare(
         "SELECT summary, sections, angles, created_at FROM research WHERE feed_item_id = ?1",

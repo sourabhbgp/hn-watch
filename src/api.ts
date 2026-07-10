@@ -52,6 +52,26 @@ export const confirmDigDeeper = (itemId: string, angles: PlannedAngle[]) =>
 export const cancelDigDeeper = (itemId: string) =>
   invoke<void>("cancel_dig_deeper", { itemId });
 
+export interface SavedAngle {
+  id: string;
+  icon: string;
+  label: string;
+  focus: string;
+  status: "done" | "failed";
+  findings: string | null;
+  error: string | null;
+}
+export interface SavedResearch {
+  summary: string;
+  sections: BriefSection[];
+  angles: SavedAngle[];
+  createdAt: number; // epoch seconds
+}
+
+// Load saved research for a feed item (null if never dug into). Spawns no claude.
+export const getResearch = (itemId: string) =>
+  invoke<SavedResearch | null>("get_research", { itemId });
+
 export interface SwarmProgress { itemId: string; angleId: string; line: string }
 export interface SwarmAngleDone {
   itemId: string;
