@@ -446,6 +446,23 @@ per task) → clean whole-branch review → live native-window verification.
       literal asterisks (no Markdown renderer, just `pre-wrap`). Content is fully readable; a
       "plain prose, no emphasis" prompt nudge or a small renderer is a trivial future polish.
 
+## Session 15 — Make the planning phase cancellable (`feat/cancellable-planning`)
+
+**Done** — closing the panel during "Planning angles…" now stops the planner immediately.
+
+- [x] **The gap** — `start_dig_deeper` ran `plan_angles` inline and never registered it, so
+      `cancel_dig_deeper` was a no-op during planning: the planner `claude -p` ran to completion
+      (≤45s) with its result discarded — a bounded but real leak (one wasted Sonnet call per fast
+      close). The research *workers* were already cancelled correctly (Session 14, verified live).
+- [x] **Fix** — new `swarm::run_planner` spawns `plan_angles` as a **registered** task and awaits
+      it over a oneshot; `cancel()` aborts it, dropping the buffered `claude` child via
+      `kill_on_drop` — the same abort → drop → SIGKILL cascade the workers use. `start_dig_deeper`
+      calls `run_planner`.
+- [x] **Deterministic test** — `cancel_sigkills_registered_childs_process` proves a registered
+      task's `kill_on_drop` child is SIGKILLed by `registry.cancel` (uses a `sleep` child, no live
+      `claude` needed), plus `cancel_unknown_item_is_noop`. **54/54** lib tests, `cargo build`
+      clean. Merged `feat/cancellable-planning` → `main` (`--no-ff`), branch pushed to origin.
+
 ## How to run
 
 ```bash

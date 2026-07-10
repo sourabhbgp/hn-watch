@@ -74,6 +74,36 @@ struct SwarmFailed {
     error: String,
 }
 
+/// Run the planner for `item_id` as a **registered, cancellable** task, returning the proposed
+/// angles. Registering under `item_id` means a `cancel(item_id)` — which the panel fires on close
+/// in every phase — aborts the planner task, dropping its buffered `claude` child via
+/// `kill_on_drop`. That is the same cascade that stops running workers, so closing during the
+/// "Planning…" phase kills the planner immediately instead of orphaning it for up to 45s.
+/// Returns `Err` if the run was cancelled before planning finished (the frontend ignores it).
+pub async fn run_planner(
+    db: Arc<Mutex<Connection>>,
+    registry: &SwarmRegistry,
+    item_id: String,
+) -> Result<Vec<PlannedAngle>, String> {
+    // Load the story context (lock, read, drop — never held across the await).
+    let ctx = {
+        let conn = db.lock().map_err(|_| "db poisoned".to_string())?;
+        db::get_feed_item(&conn, &item_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "feed item not found".to_string())?
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = tauri::async_runtime::spawn(async move {
+        // `plan_angles` is infallible (falls back to defaults). If we're aborted mid-flight,
+        // this future drops → the `claude` child drops → SIGKILL; the send below never runs.
+        let angles = agent::plan_angles(&ctx).await;
+        let _ = tx.send(angles); // receiver gone (cancelled) → ignore
+    });
+    registry.insert(item_id, handle);
+    // Task aborted by `cancel` → sender dropped → `rx` errors → report cancellation.
+    rx.await.map_err(|_| "planning cancelled".to_string())
+}
+
 /// Start (or restart) the swarm for `item_id` with the confirmed `angles`. Spawns one
 /// orchestration task and registers it for cancellation. The task: loads the item context,
 /// fans out one streaming worker per angle (all start at once — SWARM_PERMITS == MAX_ANGLES),
@@ -178,4 +208,72 @@ pub fn run_swarm(
     });
 
     registry.insert(registry_key, handle);
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Is `pid` a live, non-zombie process? A SIGKILLed-but-not-yet-reaped child briefly lingers
+    /// as a zombie ("Z"), which `kill -0` would still report as existing — so key off the state.
+    fn alive(pid: u32) -> bool {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "state=", "-p", &pid.to_string()])
+            .output()
+            .expect("run ps");
+        let state = String::from_utf8_lossy(&out.stdout);
+        let state = state.trim();
+        !state.is_empty() && !state.starts_with('Z')
+    }
+
+    /// The cancellation guarantee `run_planner` (and `run_swarm`) rely on: a task registered in
+    /// the `SwarmRegistry` that owns a `kill_on_drop` child is SIGKILLed by `cancel` — the same
+    /// abort → drop-future → drop-`Child` → kill cascade. This covers the planner phase without
+    /// needing a live `claude`: the planner spawns its buffered `claude` child exactly this way
+    /// (`claude_command()` sets `kill_on_drop(true)`, then `.output().await`). The registered task
+    /// runs on Tauri's runtime (as in production); the test body waits with plain std blocking.
+    #[test]
+    fn cancel_sigkills_registered_childs_process() {
+        use std::sync::mpsc;
+
+        let registry = SwarmRegistry::new();
+        let (tx, rx) = mpsc::channel::<u32>();
+
+        // Mirror the planner path: a registered task owns a `kill_on_drop` child and awaits it
+        // (the future that gets dropped when the task is aborted).
+        let handle = tauri::async_runtime::spawn(async move {
+            let mut child = tokio::process::Command::new("sleep")
+                .arg("30")
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn sleep");
+            let pid = child.id().expect("child pid");
+            let _ = tx.send(pid);
+            let _ = child.wait().await; // dropped on abort → child dropped → SIGKILL
+        });
+        registry.insert("item-1".to_string(), handle);
+
+        let pid = rx.recv_timeout(Duration::from_secs(5)).expect("receive child pid");
+        assert!(alive(pid), "child must be running before cancel");
+
+        registry.cancel("item-1"); // abort the registered task
+
+        // kill_on_drop signals + reaps asynchronously; poll briefly for the process to vanish.
+        let mut dead = false;
+        for _ in 0..60 {
+            if !alive(pid) {
+                dead = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(dead, "cancel must SIGKILL the registered child's process (pid {pid})");
+    }
+
+    /// Cancelling an unknown item is a harmless no-op (planner not yet registered, double-close).
+    #[test]
+    fn cancel_unknown_item_is_noop() {
+        SwarmRegistry::new().cancel("never-registered");
+    }
 }

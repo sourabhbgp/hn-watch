@@ -237,14 +237,9 @@ pub async fn start_dig_deeper(
     state: State<'_, AppState>,
     item_id: String,
 ) -> Result<Vec<agent::PlannedAngle>, String> {
-    // Load context (lock, read, drop) before the await — never hold the guard across it.
-    let ctx = {
-        let conn = state.db.lock().map_err(|_| "db poisoned".to_string())?;
-        db::get_feed_item(&conn, &item_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "feed item not found".to_string())?
-    };
-    Ok(agent::plan_angles(&ctx).await)
+    // Run the planner as a registered, cancellable task so closing the panel during the
+    // "Planning…" phase aborts it (kill_on_drop) instead of orphaning a stray planner call.
+    swarm::run_planner(Arc::clone(&state.db), &state.swarm, item_id).await
 }
 
 /// Confirm the (edited) angle list and fire the swarm. Re-clamps to MIN..=MAX server-side.
