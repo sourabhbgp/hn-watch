@@ -271,14 +271,13 @@ git commit -m "feat(search): live feed search box — stacks on monitor filter, 
 
 ---
 
-### Task 3: Live verification + STATUS + merge
+### Task 3: Live verification of core search
 
-**Files:**
-- Modify: `STATUS.md` (add a Session entry)
+**Files:** none (verification only).
 
 - [ ] **Step 1: Build and launch the native app**
 
-Run: `npm run tauri dev` (or a release build per `docs/TESTING.md`). Drive it with computer-use — **not** a browser at localhost.
+Because the computer-use launcher (`open_application`) always opens the **release** `.app`, run a `npm run tauri build` so the bundle reflects this branch, then launch it per `docs/TESTING.md`. Drive it with computer-use — **not** a browser at localhost.
 
 - [ ] **Step 2: Verify each behavior live (checklist)**
 
@@ -292,23 +291,166 @@ Confirm in the real window:
 - A nonsense query shows `No matches for “…”.`
 - The virtualized list still scrolls correctly with a filtered subset.
 
-- [ ] **Step 3: Update STATUS.md**
+---
 
-Add a new session entry to `STATUS.md` summarizing: client-side feed search (title+summary+reason, AND, case-insensitive), stacks on the monitor filter, `X of Y` count, clear button, query-aware empty state; frontend-only (no Rust/schema/deps); known 1000-cap limit tracked as TODO #7; verified live in the native window.
+### Task 4: Highlight matched terms in the cards
 
-- [ ] **Step 4: Commit the STATUS update**
+Wrap each matched search term in the card's title, summary, and reason with a subtle on-brand
+orange highlight, so the user sees *why* a card matched. Added at user request (originally a
+non-goal). `highlight` returns JSX, so it lives in a `.tsx` file; the pure term-splitting is
+shared with `matchesQuery` via a new `parseTerms` export.
+
+**Files:**
+- Modify: `src/lib/search.ts` (add + export `parseTerms`; refactor `matchesQuery` to use it)
+- Create: `src/lib/highlight.tsx` (the JSX-returning `highlight` helper)
+- Modify: `src/components/FeedCard.tsx` (accept a `query` prop; highlight title/summary/reason)
+- Modify: `src/components/Feed.tsx` (pass `query` to `FeedCard`)
+
+**Interfaces:**
+- Consumes: `parseTerms` (from `./search`), `FeedItem`.
+- Produces: `parseTerms(query: string): string[]`; `highlight(text: string, query: string): ReactNode`; `FeedCard` gains a `query: string` prop.
+
+- [ ] **Step 1: Extract `parseTerms` in `src/lib/search.ts`**
+
+Replace the body of `src/lib/search.ts` so term-splitting is a shared, exported helper (behavior of `matchesQuery` is unchanged):
+
+```ts
+import type { FeedItem } from "../types";
+
+/** Lowercase the query and split into whitespace-separated, non-empty terms. */
+export function parseTerms(query: string): string[] {
+  return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Client-side feed search. Case-insensitive; multiple whitespace-separated
+ * terms must ALL appear (AND) across the card's title + summary + reason.
+ * An empty/whitespace query matches everything (no-op filter).
+ */
+export function matchesQuery(item: FeedItem, query: string): boolean {
+  const terms = parseTerms(query);
+  if (terms.length === 0) return true;
+  const haystack = `${item.title} ${item.summary} ${item.reason}`.toLowerCase();
+  return terms.every((t) => haystack.includes(t));
+}
+```
+
+- [ ] **Step 2: Create `src/lib/highlight.tsx`**
+
+```tsx
+import type { ReactNode } from "react";
+import { parseTerms } from "./search";
+
+/** Escape regex metacharacters so a term like "c++" is matched literally. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Return `text` with every occurrence of any search term wrapped in a
+ * highlighted <mark> (subtle on-brand orange). Case-insensitive; terms are
+ * matched via a single alternation regex (non-overlapping, left-to-right).
+ * An empty query returns the text unchanged (no <mark>, no overhead).
+ */
+export function highlight(text: string, query: string): ReactNode {
+  const terms = parseTerms(query);
+  if (terms.length === 0) return text;
+  const re = new RegExp(`(${terms.map(escapeRegExp).join("|")})`, "gi");
+  // With one capturing group, split() interleaves matches at odd indices.
+  return text.split(re).map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={i} className="rounded-[2px] bg-hn-soft text-ink">
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
+  );
+}
+```
+
+- [ ] **Step 3: Highlight in `src/components/FeedCard.tsx`**
+
+Add the import at the top (after the `FeedItem` type import):
+
+```tsx
+import { highlight } from "../lib/highlight";
+```
+
+Add a `query` prop to the component's destructure and type:
+
+```tsx
+export const FeedCard = memo(function FeedCard({
+  item,
+  query,
+  onDigDeeper,
+}: {
+  item: FeedItem;
+  query: string;
+  onDigDeeper: (item: FeedItem) => void;
+}) {
+```
+
+Then replace the three text renders:
+- title (`{item.title}`) → `{highlight(item.title, query)}`
+- summary (`{item.summary}`) → `{highlight(item.summary, query)}`
+- reason (`{item.reason}`) → `{highlight(item.reason, query)}`
+
+(`React.memo` still shallow-compares props; adding `query` means cards re-highlight when the query changes but continue to skip re-render while scrolling with a stable query.)
+
+- [ ] **Step 4: Pass `query` to `FeedCard` in `src/components/Feed.tsx`**
+
+`Feed` already receives `query` (Task 2). In the virtualized row render, change the card element from `<FeedCard item={item} onDigDeeper={onDigDeeper} />` to:
+
+```tsx
+                    <FeedCard item={item} query={query} onDigDeeper={onDigDeeper} />
+```
+
+- [ ] **Step 5: Typecheck**
+
+Run: `npm run build`
+Expected: PASS — `tsc` clean, `vite build` succeeds, zero errors.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/lib/search.ts src/lib/highlight.tsx src/components/FeedCard.tsx src/components/Feed.tsx
+git commit -m "feat(search): highlight matched terms in card title/summary/reason (on-brand orange)"
+```
+
+---
+
+### Task 5: Final live verification + STATUS + merge
+
+**Files:**
+- Modify: `STATUS.md` (add a Session entry)
+
+- [ ] **Step 1: Rebuild and verify highlighting live**
+
+`npm run tauri build`, relaunch, and confirm: a query highlights the matched substrings in the
+title/summary/reason in orange; clearing the query removes all highlights; the earlier core-search
+checks (Task 3) still hold.
+
+- [ ] **Step 2: Update STATUS.md**
+
+Add a new session entry summarizing: client-side feed search (title+summary+reason, AND,
+case-insensitive), stacks on the monitor filter, `X of Y` count, clear button, query-aware empty
+state, and on-brand matched-term highlighting; frontend-only (no Rust/schema/deps); known 1000-cap
+limit tracked as TODO #7; verified live in the native window.
+
+- [ ] **Step 3: Commit the STATUS update**
 
 ```bash
 git add STATUS.md
-git commit -m "docs: STATUS — feed search (client-side, frontend-only)"
+git commit -m "docs: STATUS — feed search + term highlighting (client-side, frontend-only)"
 ```
 
-- [ ] **Step 5: Push the branch and merge**
+- [ ] **Step 4: Push the branch and merge**
 
 ```bash
 git push -u origin feat/feed-search
 git checkout main
-git merge --no-ff feat/feed-search -m "Merge feat/feed-search: client-side keyword search over the feed"
+git merge --no-ff feat/feed-search -m "Merge feat/feed-search: client-side keyword search + term highlighting over the feed"
 git push origin main
 ```
 
@@ -325,6 +467,7 @@ Keep the `feat/feed-search` branch on origin (do not delete).
 - `X of Y` count → Task 2 Step 8. ✅
 - Query clears on monitor change → Task 2 Step 4 (+ delete path). ✅
 - Empty-state `No matches for "…"` → Task 2 Step 7. ✅
+- Matched-term highlighting (on-brand orange) → Task 4 (`parseTerms` + `highlight` + FeedCard). ✅
 - No backend/types/deps change → nothing in the plan touches Rust, `types.ts`, or `package.json`. ✅
 - Known 1000-cap limitation / FTS5 follow-up → already recorded as TODO #7 (out of this plan's scope). ✅
 

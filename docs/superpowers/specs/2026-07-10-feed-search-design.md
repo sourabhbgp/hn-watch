@@ -25,6 +25,9 @@ not compete with the remaining core work (the dig-deeper swarm).
   matches; on the unfiltered feed, it searches everything loaded.
 - Matching is over **title + AI summary + reason**, case-insensitive, and multi-word (every
   whitespace-separated term must appear).
+- Matched terms are **highlighted** in each card's title, summary, and reason with a subtle
+  on-brand orange (`hn-soft` background token), so the user can see *why* a card matched — added
+  in Task 4 after live-verifying the core search (originally a non-goal; added at user request).
 - The match count reflects the filtered result (e.g. `12 of 340 matches`).
 - A query that matches nothing shows a clear empty state (`No matches for "…"`).
 - **Zero backend change**: no Rust, no schema, no new Tauri command, no `types.ts` change, no
@@ -127,7 +130,8 @@ follow-up is a backend FTS5 command — noted in `docs/TODO.md`, not built here.
 ## Non-goals (YAGNI / out of scope)
 
 - No backend / SQL / FTS5 search; no new Tauri command; no `types.ts` change.
-- No regex, fuzzy matching, ranking, or highlighting of matched terms.
+- No regex or fuzzy matching, no ranking. (Term **highlighting** is in scope — see Task 4 /
+  `src/lib/highlight.tsx` — added at user request after the core search was verified.)
 - No search across domain or monitor name (monitor filtering already exists in the sidebar).
 - No debounce, no submit button, no search history / saved searches.
 - No persistence of the query across app restarts.
