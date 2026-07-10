@@ -390,6 +390,23 @@ whatever the CLI default happens to be on the host.
 - [x] **Note:** this hardcodes the version. To always track the newest Sonnet instead, use the
       `sonnet` alias; kept the explicit `claude-sonnet-5` per request.
 
+## Session 13 — Cap per-tick fetch at 500 stories (`feat/cap-fetch-500`)
+
+**Done** — bounds the fetch window after a long gap (laptop closed for a day/week), so a
+stale watermark can't request an enormous window.
+
+- [x] **Lowered the fetch safety cap** — `MAX_PAGES` in `src-tauri/src/hn.rs` from 10 → 5
+      (5 pages × 100 = **500 stories max per tick**, down from 1000). After a long gap the tick
+      judges at most the newest 500 stories; the watermark then self-heals to ~now on the next
+      tick, and older stories in the gap are intentionally skipped.
+- [x] **Behavior unchanged for the normal case** — a fresh monitor still looks back 1 hour on
+      its first tick; steady-state ticks fetch a small window well under the cap.
+- [x] **Note:** this is a story-*count* cap, not a time clamp — `since` is unchanged, so
+      truncation is bounded by volume, not age. An explicit "never look back more than X" time
+      clamp remains a separate future option if wanted.
+- [x] **Verified** — `hn::` unit tests pass, `cargo build` clean. Merged `feat/cap-fetch-500` →
+      `main` (`--no-ff`), branch pushed to origin and kept.
+
 ## How to run
 
 ```bash
