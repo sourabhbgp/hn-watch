@@ -239,13 +239,19 @@ directly (`swarm-failed`) rather than synthesizing from nothing.
   survivors with an explicit gap note. Honest degradation, never a stuck panel.
 - **Cancellation** (closing the panel, or clicking Dig deeper on a different item — the panel is a
   single `fixed inset-0` overlay, so at most one run is ever active): `cancel_dig_deeper(item_id)`
-  looks up the orchestration task in the `SwarmRegistry` and `abort()`s it. Correctness of that one
-  call: each worker runs in a child task that **owns** both its `OwnedSemaphorePermit` and its
-  `Child` (built by `claude_command()` with `kill_on_drop(true)`). Aborting unwinds the task tree,
-  which **drops the permit** (returned to `swarm_sem`) **and drops the `Child`** (SIGKILL to the OS
-  process). So a single abort reclaims the concurrency permit *and* kills the underlying `claude`
-  — no leaked permit, no orphan process. Same `kill_on_drop` guarantee the app already relies on
-  for tick timeouts.
+  looks up the orchestration task in the `SwarmRegistry` and `abort()`s it. **The worker fan-out
+  must use a `tokio::task::JoinSet`, not a `Vec<JoinHandle>`.** This is the subtle correctness point:
+  tokio tasks are *not* structured-concurrency children — dropping a bare `JoinHandle` *detaches*
+  its task, it does not abort it. So aborting the orchestration task alone would leave the
+  per-angle workers running (holding `swarm_sem` permits and live `claude` processes) until their
+  own `ANGLE_TIMEOUT_SECS`, and a same-item restart would stall behind them since 5 workers
+  saturate the pool. A `JoinSet` fixes this: it is a local of the orchestration task, and
+  `JoinSet::drop` **aborts every still-running worker**. So aborting the orchestration task drops
+  its `JoinSet`, which aborts each worker future → each drops its `swarm_sem` permit (returned to
+  the pool) **and** its `Child` (built by `claude_command()` with `kill_on_drop(true)` → SIGKILL to
+  the OS `claude` process). One abort therefore cascades: no leaked permit, no orphan process, no
+  stale events after cancel. (The `kill_on_drop` half is the same guarantee the app already relies
+  on for tick timeouts; the `JoinSet` half is what makes the *cascade* real.)
 
 ## Data model — no new persistence; swarm state is ephemeral
 
