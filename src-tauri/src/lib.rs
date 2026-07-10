@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod hn;
 mod scheduler;
+mod swarm;
 mod tick;
 mod tray;
 
