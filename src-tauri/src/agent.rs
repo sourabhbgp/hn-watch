@@ -3,6 +3,7 @@ use crate::hn::HnItem;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -13,6 +14,14 @@ use uuid::Uuid;
 /// Both are FIFO-fair, so a third caller of a full pool simply waits its turn.
 pub const TICK_PERMITS: usize = 2;
 pub const SWARM_PERMITS: usize = 5;
+
+/// Per-call timeouts for the swarm's three phases.
+#[allow(dead_code)] // consumed by Task 8 (commands)
+const PLAN_TIMEOUT_SECS: u64 = 45;
+#[allow(dead_code)] // consumed by Task 8 (commands)
+const ANGLE_TIMEOUT_SECS: u64 = 150;
+#[allow(dead_code)] // consumed by Task 8 (commands)
+const SYNTHESIS_TIMEOUT_SECS: u64 = 90;
 
 fn tick_sem() -> &'static Semaphore {
     static SEM: OnceLock<Semaphore> = OnceLock::new();
@@ -424,6 +433,137 @@ pub async fn judge(user_prompt: &str, items: &[HnItem]) -> Result<Vec<Verdict>, 
     }
     let text = String::from_utf8_lossy(&output.stdout);
     Ok(parse_verdict(&text))
+}
+
+/// Run one buffered swarm `claude -p` call (planner / synthesis). Acquires a `swarm_sem`
+/// permit, applies `timeout_secs`, and classifies failures like `judge()`.
+#[allow(dead_code)] // consumed by Task 8 (commands)
+async fn run_buffered_swarm(prompt: &str, timeout_secs: u64) -> Result<String, AgentError> {
+    let _permit = swarm_sem()
+        .acquire()
+        .await
+        .map_err(|e| AgentError::Failed(format!("semaphore closed: {e}")))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        claude_command()
+            .arg("-p")
+            .arg("--safe-mode")
+            .arg("--model")
+            .arg("claude-sonnet-5")
+            .arg(prompt)
+            .output(),
+    )
+    .await
+    .map_err(|_| AgentError::Timeout)?
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AgentError::NotFound
+        } else {
+            AgentError::Failed(format!("failed to spawn claude: {e}"))
+        }
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(if is_auth_failure(&stderr) {
+            AgentError::NotAuthenticated
+        } else {
+            AgentError::Failed(format!("claude exited with status {}: {stderr}", output.status))
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Plan the investigative angles for a story. Never errors: any failure (missing/logged-out
+/// claude, timeout, garbage output) resolves to `default_angles()` so the confirm UI always
+/// has a proposal to show.
+#[allow(dead_code)] // consumed by Task 8 (commands)
+pub async fn plan_angles(ctx: &FeedItemContext) -> Vec<PlannedAngle> {
+    match run_buffered_swarm(&build_plan_prompt(ctx), PLAN_TIMEOUT_SECS).await {
+        Ok(text) => parse_plan(&text),
+        Err(_) => default_angles(),
+    }
+}
+
+/// Compile the combined brief from the per-angle results (`Some` = output, `None` = failed).
+#[allow(dead_code)] // consumed by Task 8 (commands)
+pub async fn synthesize(
+    ctx: &FeedItemContext,
+    results: &[(PlannedAngle, Option<String>)],
+) -> Result<Brief, AgentError> {
+    let text = run_buffered_swarm(&build_synthesis_prompt(ctx, results), SYNTHESIS_TIMEOUT_SECS).await?;
+    parse_brief(&text).ok_or_else(|| AgentError::Failed("could not parse brief JSON".into()))
+}
+
+/// Run one investigative worker with live streaming. Acquires a `swarm_sem` permit, spawns
+/// `claude -p --output-format stream-json …` with web tools allow-listed (least privilege),
+/// reads stdout line-by-line, forwards each progress line via `on_progress`, and returns the
+/// authoritative final text from the terminal `result` event. Times out at `ANGLE_TIMEOUT_SECS`.
+///
+/// NOTE (Task 1): if web tools are unavailable in headless `-p`, drop the two `--allowedTools`
+/// args to run closed-book — the rest is unchanged.
+#[allow(dead_code)] // consumed by Task 8 (commands)
+pub async fn stream_investigate(
+    ctx: &FeedItemContext,
+    angle: &PlannedAngle,
+    on_progress: impl Fn(String),
+) -> Result<String, AgentError> {
+    let _permit = swarm_sem()
+        .acquire()
+        .await
+        .map_err(|e| AgentError::Failed(format!("semaphore closed: {e}")))?;
+    let prompt = build_investigate_prompt(ctx, angle);
+
+    let mut child = claude_command()
+        .arg("-p")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose")
+        .arg("--allowedTools")
+        .arg("WebSearch")
+        .arg("WebFetch")
+        .arg("--model")
+        .arg("claude-sonnet-5")
+        .arg(&prompt)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AgentError::NotFound
+            } else {
+                AgentError::Failed(format!("failed to spawn claude: {e}"))
+            }
+        })?;
+
+    let stdout = child.stdout.take().ok_or_else(|| AgentError::Failed("no stdout".into()))?;
+
+    // Drive the whole read under one timeout; on timeout the `child` drops (kill_on_drop) at fn exit.
+    let read = async {
+        let mut lines = BufReader::new(stdout).lines();
+        let mut final_text: Option<String> = None;
+        while let Ok(Some(line)) = lines.next_line().await {
+            match parse_stream_line(&line) {
+                StreamLine::Progress(p) => on_progress(p),
+                StreamLine::Final { text, is_error } => {
+                    if is_error {
+                        return Err(AgentError::Failed("agent reported an error".into()));
+                    }
+                    final_text = Some(text);
+                }
+                StreamLine::Ignore => {}
+            }
+        }
+        // Reap the process; a non-zero exit with no result line is a failure.
+        let status = child.wait().await.map_err(|e| AgentError::Failed(format!("wait failed: {e}")))?;
+        match final_text {
+            Some(t) if status.success() => Ok(t),
+            _ => Err(AgentError::Failed(format!("worker produced no result (status {status})"))),
+        }
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(ANGLE_TIMEOUT_SECS), read)
+        .await
+        .map_err(|_| AgentError::Timeout)?
 }
 
 /// Compiled research brief — matches the frontend `Brief` (summary + sections). The panel
