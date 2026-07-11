@@ -7,8 +7,6 @@ judging, summarizing, and streaming matches into one feed, with a native notific
 something lands. Any story can spin up a **research swarm** that investigates it from several angles
 and hands you one combined brief.
 
-![status: feature-complete against the brief](https://img.shields.io/badge/status-feature--complete-1f6feb)
-
 ## Requirements
 
 - **macOS** (only platform tested - see [Platform](#platform))
