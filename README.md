@@ -2,6 +2,8 @@
 
 A native desktop **watchtower for Hacker News**, powered by local Claude agents. **macOS.**
 
+**[Architecture](./ARCHITECTURE.md)** · [Requirements](#requirements) · [Install](#get-it-running) · [Usage](#using-hn-watch)
+
 Tell it what you care about in plain English, and a background agent watches Hacker News for you -
 judging, summarizing, and streaming matches into one feed, with a native notification when
 something lands. Any story can spin up a **research swarm** that investigates it from several angles
@@ -100,3 +102,7 @@ Test against the **real native window**, not a browser at `localhost` - the tray
 [`docs/TESTING.md`](./docs/TESTING.md). For the assignment brief see
 [`docs/REQUIREMENTS.md`](./docs/REQUIREMENTS.md); for the per-session build log and design rationale,
 [`STATUS.md`](./STATUS.md).
+
+## License
+
+[MIT](./LICENSE)
