@@ -576,6 +576,24 @@ swarm" lanes **and** the combined brief stacked below — cluttered. Show only t
       "Apple sues OpenAI" research — panel goes header → combined brief, no agent lanes, clean spacing.
       `tsc --noEmit` clean.
 
+## Session 19 — Slim the README (`feat/readme-slim`)
+
+**Goal:** the README had grown to 155 lines — a long "interesting part" essay, a full "Design
+decisions & trade-offs" list, and a "Deliberately not built" section. Too much for a front page;
+nobody reads a README that long. Cut it to a brief, user-first doc and link out for depth.
+
+**Done**
+
+- [x] Rewrote `README.md` → 82 lines / 4 KB (was 155 / 8.4 KB): tagline, stack table, prerequisites,
+      run-it, a short **How it works** (two-pool idea as a hook, not an essay), compact project tree, tests.
+- [x] Moved the depth out of the README to pointers, not a new file — the deep content already lives
+      in [`docs/architecture.html`](docs/architecture.html) (visual system design) and this `STATUS.md`
+      (per-feature rationale + scope calls). No `DECISIONS.md`-style doc re-created.
+- [x] Fixed the platform overclaim: the old "cross-platform by construction / just add CI runners"
+      became honest — **built/run/tested on macOS only; other OSes unverified**.
+- [x] Cleared the "Polish + design write-up / trade-offs in README" backlog item (done the opposite —
+      moved it *out*).
+
 ## How to run
 
 ```bash
@@ -596,7 +614,8 @@ lossless ingestion, tray + notifications, and now the **dig-deeper research swar
 
 ## Backlog (later phases)
 
-- [ ] Polish + design write-up / trade-offs in README
+- [x] Polish + design write-up / trade-offs in README — resolved in Session 19 by moving depth *out*
+      of the README (visual → `docs/architecture.html`, rationale → `STATUS.md`) and keeping it brief
 - [ ] Brief Markdown polish — render (or strip) inline `**bold**`/`_italic_` in section bodies
 
 ---
