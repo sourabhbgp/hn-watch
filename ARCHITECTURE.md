@@ -1,74 +1,59 @@
 # HN Watch - Architecture
 
-How the app is put together, written for two readers:
+Two ways to read this:
 
-- **[In plain English](#in-plain-english)** and **[How it works, step by step](#how-it-works-step-by-step)** - no technical background needed.
-- **[Under the hood](#under-the-hood)** - the real mechanics, diagrams, and source files for developers.
+- **[In plain English](#in-plain-english)** + **[How it works](#how-it-works)** - no tech background needed.
+- **[Under the hood](#under-the-hood)** - the mechanics and source files, for developers.
 
-Every diagram below renders directly on GitHub. For how to run and use the app, see the
-[README](./README.md); for the verbatim assignment brief, see [`docs/REQUIREMENTS.md`](./docs/REQUIREMENTS.md).
+Diagrams render on GitHub. To run the app, see the [README](./README.md).
 
 ---
 
 ## In plain English
 
-**HN Watch is like a tireless assistant that reads [Hacker News](https://news.ycombinator.com) for you.**
+**HN Watch is a tireless assistant that reads [Hacker News](https://news.ycombinator.com) for you.**
 
-You tell it, in your own words, what you care about - say _"new AI startup launches"_. From then on it
-keeps an eye on Hacker News around the clock. Whenever a story matches your interest, it writes you a
-one-line summary and drops it into your feed. Even with the window closed it keeps working quietly in
-your menu bar, and it pops up a notification when something new lands.
+Tell it what you care about, in your own words. It watches around the clock and drops matching stories -
+each with a one-line summary - into your feed. It lives in the menu bar and notifies you when something
+new lands.
 
-And when a story really grabs you, you can click **"Dig deeper"**. Instead of one assistant, a small
-team of them fans out to research that story from different angles all at once - who is behind it, how
-the tech works, the competition, the risks - then hands you a single combined summary.
+Want more on a story? Click **Dig deeper**. A small team of AI agents researches it from different
+angles at once, then hands you one combined summary.
 
-That is the whole app: a slow, steady **watcher**, plus an on-demand **research team** - both powered
-by Claude running on your own computer.
+All powered by Claude on your own computer. No server, no cloud.
 
 ```mermaid
 flowchart LR
     You["You<br/>'Watch for AI startup launches'"] --> HNW["HN Watch"]
     HNW --> Reads["Reads Hacker News<br/>around the clock"]
-    Reads --> Feed["Your feed<br/>matching stories + summaries"]
-    Feed --> Dig["Click 'Dig deeper'<br/>on any story"]
+    Reads --> Feed["Your feed<br/>matches + summaries"]
+    Feed --> Dig["Click 'Dig deeper'"]
     Dig --> Team["A team of AI agents<br/>research it together"]
     Team --> Brief["One combined summary"]
 ```
 
-## How it works, step by step
+## How it works
 
-1. **You set up a watch.** You create a _monitor_: a plain-English description of what you care
-   about, and how often to check (anywhere from every 15 minutes to every 6 hours).
-2. **It checks Hacker News for you.** On each check, HN Watch grabs the latest stories and asks
-   Claude which ones actually match what you asked for, and to summarize them.
-3. **Matches land in your feed.** You never see the same story twice, and everything is saved to your
-   computer - so closing the app loses nothing.
-4. **It keeps watch in the background.** Closing the window doesn't quit the app; it tucks into the
-   menu bar and keeps checking, notifying you when new matches arrive.
-5. **You can dig deeper any time.** Any story has a **Dig deeper** button that sends several AI agents
-   to research it at the same time and combine their findings into one brief you can reopen later.
-
-Everything runs locally through **Claude Code** (`claude`) on your machine - there is no HN Watch
-server, and your monitors and feed live in a single file on your computer.
+1. **Set up a watch.** Describe what you care about, and how often to check (15 min to 6 hours).
+2. **It checks for you.** Each check, Claude picks the stories that match and summarizes them.
+3. **Matches land in your feed.** No duplicates. Everything saved locally.
+4. **It watches in the background.** Runs in the menu bar; notifies you on new matches.
+5. **Dig deeper any time.** Several agents research one story at once, combined into a single brief.
 
 ---
 
 ## Under the hood
 
-The rest of this document is the technical design: how the pieces fit, what runs where, and which
-source file owns each concern.
+The technical design: how the pieces fit, and which file owns what.
 
-### The core idea: one runtime, two rhythms
+### One runtime, two rhythms
 
-Scheduled **monitors** and the on-demand **dig-deeper swarm** are the same primitive - a `claude -p`
-call - driven at opposite tempos:
+Monitors and the dig-deeper swarm are the same primitive - a `claude -p` call - at two speeds:
 
-- **Monitors = a trickle.** One call per tick, running forever in the background.
-- **Swarm = a burst.** Many calls fired the instant you click "Dig deeper".
+- **Monitors: a trickle.** One call per tick, forever, in the background.
+- **Swarm: a burst.** Many calls at once when you click Dig deeper.
 
-Both go through one **agent runtime**, but that runtime keeps **two strictly separate concurrency
-pools** so the two tempos never fight each other:
+One runtime, but **two separate pools**, so they never fight:
 
 ```mermaid
 flowchart LR
@@ -84,15 +69,13 @@ flowchart LR
     SS --> CW["claude -p<br/>planner + up to 5 workers + synthesis"]
 ```
 
-Strict separation, no overflow: an interactive swarm never queues behind background ticks, and a
-long-running swarm never blocks a scheduled tick. The scarce resource being protected is the upstream
-Claude rate limit, not the laptop. (`src-tauri/src/agent.rs`)
+Strict separation, no overflow: a swarm never waits on ticks, a tick never waits on a swarm. The limit
+being protected is Claude's rate limit, not the laptop. (`agent.rs`)
 
 ### System map
 
-Three tiers: the WebView UI, the Rust core, and everything outside the app. The UI talks to the core
-over Tauri commands (UI to Rust) and events (Rust to UI); every path to Claude funnels through the one
-agent runtime.
+Three tiers. The UI talks to the Rust core over Tauri commands (up) and events (down); every path to
+Claude goes through the one agent runtime.
 
 ```mermaid
 flowchart TB
@@ -129,41 +112,32 @@ flowchart TB
 
 ### Flow · monitor tick (the trickle)
 
-One tick = one pass for one monitor. The order matters: nothing is written until the whole window has
-been judged, so a crash or a failed batch is safe to retry.
+One tick = one pass for one monitor. Nothing is saved until the whole batch is judged, so a failure is
+safe to retry.
 
 ```mermaid
 flowchart LR
-    T["Timer fires"] --> FE["Fetch every HN story<br/>since the watermark"]
-    FE --> PF["Drop already-seen<br/>(dedup vs. seen set)"]
+    T["Timer fires"] --> FE["Fetch HN stories<br/>since the watermark"]
+    FE --> PF["Drop already-seen"]
     PF --> J["claude -p judges + summarizes<br/>in chunks of ≤ 30"]
     J --> SV["Save matches · mark seen<br/>advance watermark"]
-    SV --> EM["Append to feed<br/>+ native notification"]
+    SV --> EM["Append to feed<br/>+ notification"]
 ```
 
-Key properties:
+- **Watermark, not "newest 30".** Each monitor tracks a watermark and pulls everything since it, so a
+  burst isn't truncated. It advances to `max(created_at) - 5 min` (Algolia indexes late); the margin
+  re-scans the tail, deduped for free. First tick: last 1 hour. Capped at 500 stories/tick.
+- **Fail-closed.** If any batch fails, the tick errors **before any DB write** - nothing saved,
+  watermark held, whole window re-judged next tick.
+- **Empty is valid.** 0 matches is a result, not an error.
+- **Sandboxed + pinned.** Each call runs in a temp dir, `--safe-mode`, null stdin, pinned to
+  `--model claude-sonnet-5`.
 
-- **Watermark, not "newest 30".** Each monitor carries a watermark and pulls *everything* since it
-  (paginated), so a burst of stories is not silently truncated to 30. The watermark advances to
-  `max(created_at) - 5 min` because Algolia indexes asynchronously; the 5-minute margin re-scans the
-  tail each tick (free - it is `seen`-deduplicated). First tick looks back 1 hour. A per-tick cap of
-  5 pages × 100 = 500 stories bounds the window after a long laptop sleep; the watermark then
-  self-heals over the next ticks.
-- **Fail-closed.** The unseen set is judged in chunks of ≤ 30, run sequentially within a tick. If any
-  batch fails, the tick returns an error **before any DB write** - nothing is committed, the watermark
-  does not advance, and the whole window is re-judged next tick. No half-ingested state.
-- **A 0-match tick is a valid empty result, not an error.**
-- **Sandboxed, pinned calls.** Every `claude` call runs from a temp dir with `$PWD` overridden,
-  `--safe-mode`, and null stdin, so a background tick can never read your files or trip a macOS
-  file-access prompt. All calls pin `--model claude-sonnet-5` so results do not drift with the host's
-  default model.
-
-(`src-tauri/src/tick.rs`, `src-tauri/src/scheduler.rs`)
+(`tick.rs`, `scheduler.rs`)
 
 ### Flow · dig deeper (the burst)
 
-Clicking "Dig deeper" on a feed card plans a handful of angles, then fans out one streaming `claude -p`
-worker per angle - all at once - and compiles their findings into one brief.
+Plan a few angles, fan out one streaming worker per angle - all at once - then compile into one brief.
 
 ```mermaid
 flowchart LR
@@ -181,26 +155,18 @@ flowchart LR
     BR --> SAVE["Saved to SQLite<br/>reopen instantly · 'Dig deeper again'"]
 ```
 
-Key properties:
+- **Dynamic angles.** The planner picks 2-5 angles per story (company, tech, market, risks). Workers get
+  only `--allowedTools WebSearch WebFetch`.
+- **Live + cancellable.** Workers stream via `--output-format stream-json`. Closing aborts them
+  (`JoinSet` + `kill_on_drop` → SIGKILL) - no orphaned processes.
+- **Degrades gracefully.** A failed angle doesn't sink the run; the brief compiles from the rest.
+- **Persisted.** Saved per story; reopen instantly, spawns zero `claude`.
 
-- **Dynamic angles.** The planner proposes between 2 and 5 angles for the specific story (e.g. the
-  company and people, how the tech works, the market and rivals, a skeptic's take). Workers run with
-  least privilege - `--allowedTools WebSearch WebFetch`.
-- **Real streaming, real cancellation.** Workers run `claude -p --output-format stream-json`; progress
-  forwards live to per-angle lanes. Closing the panel aborts in-flight work via a `JoinSet` +
-  `kill_on_drop`, which SIGKILLs the `claude` children - no orphaned processes, in any phase (planning,
-  running, or synthesizing).
-- **Graceful degradation.** A failed or timed-out angle does not sink the run: the brief still compiles
-  from the survivors and notes the gap.
-- **Persisted.** A finished run (brief + every angle) is saved per feed item; reopening shows it
-  instantly from SQLite and spawns zero `claude`.
-
-(`src-tauri/src/swarm.rs`, `src-tauri/src/agent.rs`)
+(`swarm.rs`, `agent.rs`)
 
 ### Persistence
 
-Everything the app needs to survive a restart lives in one local SQLite file. On launch, monitors
-re-spawn their workers and the feed re-renders from disk.
+One local SQLite file. On launch, monitors re-spawn and the feed re-renders from disk.
 
 ```mermaid
 flowchart LR
@@ -212,7 +178,7 @@ flowchart LR
     end
 ```
 
-(`src-tauri/src/db.rs`)
+(`db.rs`)
 
 ### Where things live
 
