@@ -25,7 +25,7 @@ Built in phases across sessions. This file is intentionally light — it loads e
 | What we're building & why (verbatim brief) | `docs/REQUIREMENTS.md` |
 | Where we are / per-session log | `STATUS.md` |
 | Design system — tokens, brand, components | `docs/design.md` |
-| Visual system architecture | `docs/architecture.html` |
+| System architecture (diagrams) | `ARCHITECTURE.md` |
 | Native-window test loop | `docs/TESTING.md` |
 | UI code | `src/` |
 | Rust core (window, tray, workers, agent runtime) | `src-tauri/` |

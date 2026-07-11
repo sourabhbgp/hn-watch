@@ -1,7 +1,7 @@
 # HN Watch — Design System
 
 The human-readable companion to `src/index.css` (which holds the authoritative
-design tokens) and `docs/architecture.html`. When code and this doc disagree,
+design tokens) and [`ARCHITECTURE.md`](../ARCHITECTURE.md). When code and this doc disagree,
 `src/index.css` wins for values; update this doc to match.
 
 ## Brand
