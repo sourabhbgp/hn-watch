@@ -253,23 +253,28 @@ export function DigDeeperPanel({ item, onClose }: { item: FeedItem; onClose: () 
             </>
           ) : (
             <>
-              <div className="mb-2 flex items-center justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
-                  Agents
-                </span>
-                <span className="font-mono text-[11px] text-faint">
-                  {doneCount}/{angles.length} done
-                </span>
-              </div>
-              <div className="space-y-2">
-                {angles.map((a) => (
-                  <AngleLane key={a.id} angle={a} />
-                ))}
-              </div>
+              {/* Live run shows the per-agent lanes; a reopened saved run shows only the brief. */}
+              {phase !== "saved" && (
+                <>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
+                      Agents
+                    </span>
+                    <span className="font-mono text-[11px] text-faint">
+                      {doneCount}/{angles.length} done
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {angles.map((a) => (
+                      <AngleLane key={a.id} angle={a} />
+                    ))}
+                  </div>
+                </>
+              )}
 
               {brief && (
                 <>
-                  <div className="mt-6 mb-2 flex items-center gap-2">
+                  <div className={`${phase === "saved" ? "" : "mt-6"} mb-2 flex items-center gap-2`}>
                     <span className="text-[14px]">🧩</span>
                     <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
                       Combined brief

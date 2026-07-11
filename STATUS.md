@@ -560,6 +560,22 @@ restored; a background tick had run while hidden — Sonnet5 Test 256 → 363 ma
 `init_state`/`lib.rs` (entry-point, acceptable); the Create button silently no-ops on
 whitespace-only input rather than showing a "required" hint.
 
+## Session 18 — Reopened dig-deeper shows only the combined brief (`feat/dig-deeper-saved-brief-only`)
+
+**Goal:** on reopening a *saved* dig-deeper run, the panel showed the raw per-agent "Research
+swarm" lanes **and** the combined brief stacked below — cluttered. Show only the brief.
+
+**Done**
+
+- [x] `DigDeeperPanel.tsx` — the per-agent lanes ("Agents" header + `AngleLane` list) now render
+      only during a **live run** (`phase !== "saved"`); a reopened saved run jumps straight to the
+      **🧩 Combined brief** (researched-ago label + "Dig deeper again"). Live streaming flow and the
+      dig-again re-plan are untouched.
+- [x] Dropped the brief header's `mt-6` top gap in the saved case (no lanes above it anymore).
+- [x] **Verified live** in the native release window: rebuilt bundle, reopened the saved
+      "Apple sues OpenAI" research — panel goes header → combined brief, no agent lanes, clean spacing.
+      `tsc --noEmit` clean.
+
 ## How to run
 
 ```bash
