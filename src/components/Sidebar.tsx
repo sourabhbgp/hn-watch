@@ -215,6 +215,7 @@ export function Sidebar({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Monitor name"
+              maxLength={100}
               className="w-full rounded-md border border-line bg-paper px-2 py-1.5 text-[12.5px] text-ink placeholder:text-faint"
             />
             <textarea
@@ -222,6 +223,7 @@ export function Sidebar({
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="What do you care about? (natural language)"
               rows={3}
+              maxLength={1000}
               className="w-full resize-none rounded-md border border-line bg-paper px-2 py-1.5 text-[12.5px] text-ink placeholder:text-faint"
             />
             <select

@@ -102,6 +102,11 @@ pub async fn fetch_since(since: i64) -> Result<Vec<HnItem>, String> {
             .send()
             .await
             .map_err(|e| format!("hn request failed: {e}"))?
+            // Treat a non-2xx (e.g. Algolia 429 rate-limit / 503 outage) as a real error,
+            // not an empty-but-successful window — otherwise the tick would report
+            // "0 checked" as success and hide the outage. Surfaces as TickError::Hn.
+            .error_for_status()
+            .map_err(|e| format!("hn returned an error status: {e}"))?
             .text()
             .await
             .map_err(|e| format!("hn read failed: {e}"))?;

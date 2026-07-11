@@ -1,5 +1,5 @@
-// Shared UI types. These mirror what the Rust core will eventually send over
-// Tauri events/commands — for now they're populated from mock data.
+// Shared UI types. These mirror the DTOs the Rust core sends over
+// Tauri commands/events (see `src-tauri/src/commands.rs`).
 
 export type MonitorStatus = "active" | "paused" | "error";
 
