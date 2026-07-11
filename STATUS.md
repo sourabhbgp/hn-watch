@@ -594,6 +594,25 @@ nobody reads a README that long. Cut it to a brief, user-first doc and link out 
 - [x] Cleared the "Polish + design write-up / trade-offs in README" backlog item (done the opposite —
       moved it *out*).
 
+## Session 20 — Root ARCHITECTURE.md with GitHub-rendered diagrams (`feat/architecture-md`)
+
+**Goal:** `docs/architecture.html` only showed raw HTML source on GitHub (nobody saw the diagram),
+and it was **stale** — its core-idea box said "N permits shared · K reserved" and drew a fixed 4
+angles. The real code is two *strictly separate* pools and *dynamic* angles.
+
+**Done**
+
+- [x] New root [`ARCHITECTURE.md`](ARCHITECTURE.md) — 5 **Mermaid** diagrams that render natively on
+      GitHub: two-pool runtime, system map, monitor tick, dig-deeper fan-out, persistence + a
+      "where things live" file map.
+- [x] **Verified every claim against the current codebase**, not the old HTML: `tick_sem`=2 /
+      `swarm_sem`=5 strict separation (`agent.rs`), dynamic `MIN_ANGLES`=2..`MAX_ANGLES`=5,
+      `BATCH_SIZE`=30, `LOOKBACK`=3600s, `WATERMARK_MARGIN`=300s, 5×100=500 per-tick cap (`hn.rs`),
+      temp-dir/`$PWD`/`--safe-mode`/null-stdin sandbox, `--model claude-sonnet-5` pin,
+      worker `--allowedTools WebSearch WebFetch`, `JoinSet` + `kill_on_drop` cancellation.
+- [x] Removed the stale `docs/architecture.html`; repointed the three live references
+      (`README.md`, `CLAUDE.md`, `docs/design.md`) to `ARCHITECTURE.md`.
+
 ## How to run
 
 ```bash

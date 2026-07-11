@@ -79,8 +79,8 @@ so an interactive swarm never queues behind background ticks and a long swarm ne
 | Data          | HN via the [Algolia HN Search API](https://hn.algolia.com/api)    |
 | Storage       | SQLite (`rusqlite`, bundled) - local, restart-safe                 |
 
-**Want the full picture?** A visual system design - the two-pool runtime, the tick flow, and the
-swarm fan-out - lives in [`docs/architecture.html`](./docs/architecture.html) (open it in a browser).
+**Want the full picture?** The complete architecture - the two-pool runtime, the monitor tick, the
+swarm fan-out, and persistence, with diagrams - is in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## Platform
 
