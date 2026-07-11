@@ -20,12 +20,25 @@ and hands you one combined brief.
 
 ## Get it running
 
+HN Watch runs from source. Once the [requirements](#requirements) above are installed, open a
+terminal (Terminal.app) and run these four steps in order:
+
 ```bash
+# 1. Clone this repository
+git clone https://github.com/sourabhbgp/hn-watch.git
+
+# 2. Go into the project folder
+cd hn-watch
+
+# 3. Install the dependencies
 npm install
-npm run tauri dev      # opens the native HN Watch window
+
+# 4. Launch the app — opens the native HN Watch window
+npm run tauri dev
 ```
 
-That's the app. (To produce a standalone bundle instead: `npm run tauri build`.)
+The **first** launch takes a few minutes: Rust compiles the app the first time. Every launch after
+that is fast. When you're done, quit from the tray menu (see [Using HN Watch](#using-hn-watch)).
 
 ## Using HN Watch
 
