@@ -40,6 +40,28 @@ npm run tauri dev
 The **first** launch takes a few minutes: Rust compiles the app the first time. Every launch after
 that is fast. When you're done, quit from the tray menu (see [Using HN Watch](#using-hn-watch)).
 
+## Install as a Mac app
+
+Prefer a real app in your **Applications** folder — one you open from Launchpad or Spotlight, with
+no terminal? Build the installer once:
+
+```bash
+# From the project folder, after `npm install`
+npm run tauri build
+```
+
+This produces two things under `src-tauri/target/release/bundle/`:
+
+- **`dmg/HN Watch_<version>_aarch64.dmg`** — the installer you double-click.
+- **`macos/HN Watch.app`** — the app bundle itself.
+
+Open the `.dmg`, **drag `HN Watch` onto the Applications shortcut**, and launch it like any other Mac
+app. It still needs [Claude Code](#requirements) on your `PATH` to run monitors.
+
+> **First launch on another Mac:** the app isn't notarized with an Apple Developer ID, so macOS
+> Gatekeeper blocks it the first time. **Right-click the app → Open → Open** once; after that it
+> launches normally. (On the machine that built it, it just opens.)
+
 ## Using HN Watch
 
 **1. Create a monitor.** In the left sidebar, click **New monitor** and fill in three things:

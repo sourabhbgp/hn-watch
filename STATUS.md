@@ -632,6 +632,26 @@ GitHub - short, clear, no dev clutter.
 - [x] Top-of-README nav line (Architecture · Requirements · Install · Usage); added an **MIT `LICENSE`**
       (surfaces the "MIT license" tab) + a README License section.
 
+## Session 22 — Installable Mac app (`feat/installable-app`)
+
+**Goal:** ship a real double-click-to-install app, not just a run-from-source dev loop - answer
+"how do people install it and use it from Applications like any macOS app?"
+
+**Done**
+
+- [x] **Proper display name:** `productName` `hn-watch` → **`HN Watch`** in `tauri.conf.json`, so the
+      app reads correctly in Applications, Launchpad, and the menu bar. Bundle identifier unchanged
+      (`com.sourabh.hnwatch`), so existing app data / settings are untouched.
+- [x] **Verified the packaged build:** `npm run tauri build` produces `HN Watch.app` +
+      `HN Watch_0.1.0_aarch64.dmg` (~5.7 MB) under `src-tauri/target/release/bundle/`. Launched the
+      built `.app` standalone (not the dev server) and confirmed the process runs; ad-hoc signed.
+- [x] **README `Install as a Mac app` section:** `tauri build` → open the `.dmg` → drag to
+      Applications → launch. Documented the one-time Gatekeeper right-click → Open on other Macs
+      (not notarized - no Apple Developer ID) and the standing `claude`-on-PATH requirement.
+
+**Not done (intentionally):** code signing + notarization (needs a $99/yr Apple Developer ID) and
+publishing a GitHub Release DMG - deferred until there's a distribution audience.
+
 ## How to run
 
 ```bash
