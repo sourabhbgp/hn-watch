@@ -505,6 +505,61 @@ button re-runs on demand. Built via brainstorm → spec → 6-task plan → suba
       path.) Merged `feat/persist-dig-deeper-research` → `main` (`--no-ff`), branch pushed to origin
       and kept.
 
+## Session 17 — Production-readiness pass (audit + E2E stress test + hardening)
+
+**Goal:** a full pre-handoff sweep — security, secret-leak, dead-code cleanup, and end-to-end
+stress testing in the real native window — so the repo is safe to send to a reviewer.
+
+**Audited clean (verified, no change needed):**
+
+- [x] **No secret/key leak** — nothing sensitive tracked (no `.env`/`.pem`/keys/DB), and a scan of
+      the **entire git history** for `sk-ant-`/AWS/GitHub/private-key patterns found nothing.
+      `.gitignore` correctly excludes `node_modules/`, `dist/`, `target/`, `gen/`.
+- [x] **No command injection** — every `claude` call passes the prompt as an **argv element** via
+      `tokio::process::Command`, never a shell. Live-proved: a monitor named
+      `Test 🚀 "q" $(whoami) ` + a prompt containing `; rm -rf / ; {"k":"v"} 日本語 & | '||'` was
+      accepted **literally**, ticked, and returned 0 matches — no shell execution, no crash.
+- [x] **No SQL injection** — all queries use bound `?n` params; the only `format!`-built SQL
+      (`ensure_column`) uses hardcoded literals.
+- [x] **No XSS** — all HN/Claude content renders as React-escaped text; no `dangerouslySetInnerHTML`;
+      the search-highlight regex escapes metacharacters.
+
+**Fixed:**
+
+- [x] **🔴 Stale README** — it described the app as *"early scaffolding ← we are here"* with storage
+      "coming in a later phase" and an unchecked roadmap, on a fully-built app. Since the brief
+      **grades the README**, rewrote it to be accurate and to walk through the real design decisions
+      & trade-offs (two reserved agent pools, watermark ingestion, fail-closed judging, sandboxed
+      `claude`, streaming swarm + cancellation, persisted research).
+- [x] **Dead code removed** — deleted `src/mock/data.ts` (201 lines, unimported) and fixed the stale
+      "populated from mock data" comment in `types.ts`.
+- [x] **CSP hardening** — `tauri.conf.json` security CSP was `null`; set a conservative policy
+      (`default-src 'self'`, IPC `connect-src`, `style-src 'self' 'unsafe-inline'`). **Live-verified**
+      the built app still renders — including the **virtualized feed scroll** (react-virtual inline
+      `transform`s survive the policy) and the dig-deeper slide-over.
+- [x] **HN non-2xx now surfaces as an error** (`hn.rs`) — added `.error_for_status()`, so an Algolia
+      429/503 becomes a `TickError::Hn` (monitor `error` chip) instead of a silent "0 checked,
+      success" that would hide an outage during a demo. (Audit finding.)
+- [x] **Input length caps** — `maxLength` on the monitor name (100) / prompt (1000) inputs; the
+      backend already trimmed + rejected empty and floored the interval at 60s.
+
+**Live E2E in the native release window (computer-use):** feed renders + virtualized scroll; feed
+title link opens the **external browser** (does *not* hijack the app webview); whitespace-only create
+is a graceful no-op; the injection/unicode payload above; feed **search + matched-term highlight +
+clear**; full **dig-deeper** flow (planner → confirm popup with 5 story-specific angles → remove an
+angle → launch swarm → live per-angle streaming); **cancellation** (closing the panel SIGKILLed all
+4 worker `claude` children — `ps` showed **0** stream-json workers remaining, no orphans); **delete**
+monitor (+ FK cascade); **close-to-tray** (Cmd-W → process alive, 0 windows) and **reopen** (window
+restored; a background tick had run while hidden — Sonnet5 Test 256 → 363 matches).
+
+- [x] **Verified:** `cargo test` 58/58, `tsc` + `vite build` clean (0 warnings), full `tauri build`
+      bundles clean. Cleaned up the throwaway injection-test monitor created during verification.
+
+**Deferred (Minor, non-blocking — recorded, not fixed):** four effectively-unreachable
+`.lock().unwrap()` poisoning sites (`scheduler.rs`, `swarm.rs`); startup `.expect()` in
+`init_state`/`lib.rs` (entry-point, acceptable); the Create button silently no-ops on
+whitespace-only input rather than showing a "required" hint.
+
 ## How to run
 
 ```bash
