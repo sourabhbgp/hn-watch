@@ -613,6 +613,25 @@ angles. The real code is two *strictly separate* pools and *dynamic* angles.
 - [x] Removed the stale `docs/architecture.html`; repointed the three live references
       (`README.md`, `CLAUDE.md`, `docs/design.md`) to `ARCHITECTURE.md`.
 
+## Session 21 — Public-facing README + ARCHITECTURE polish
+
+**Goal:** make the repo read like a well-maintained open-source project for an end user landing on
+GitHub - short, clear, no dev clutter.
+
+**Done**
+
+- [x] **README, end-user-first:** slimmed (155 → ~90 lines), reordered to Requirements → Get it
+      running → Using HN Watch → How it works → Platform → Development. Added a step-by-step
+      `git clone` → `cd` → `npm install` → `npm run tauri dev` walkthrough and a **Using HN Watch**
+      usage guide. Dev-only doc links (STATUS/TESTING/REQUIREMENTS) corralled into Development.
+- [x] Honest platform note (macOS-only tested, others unverified); removed the static "feature-complete"
+      shields badge (not backed by CI); removed all em-dashes.
+- [x] **`ARCHITECTURE.md` (root, GitHub-rendered Mermaid)** made **dual-audience**: a plain-English
+      intro + step-by-step for beginners, then "Under the hood" for developers. Then tightened to short
+      sentences (no essay). Verified live on GitHub that all diagrams render.
+- [x] Top-of-README nav line (Architecture · Requirements · Install · Usage); added an **MIT `LICENSE`**
+      (surfaces the "MIT license" tab) + a README License section.
+
 ## How to run
 
 ```bash
